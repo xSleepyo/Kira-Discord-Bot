@@ -129,24 +129,16 @@ function keepAlive() {
 
 // --- Self-Pinging Function (UNCHANGED) ---
 function selfPing() {
-    // Determine the URL to ping. Use the environment variable if available (e.g., Render, Railway), 
-    // otherwise default to localhost or an assumed external URL.
     const url = process.env.RENDER_EXTERNAL_URL || `http://localhost:${process.env.PORT || 3000}`; 
 
-    setInterval(() => {
+    setInterval(async () => {
         try {
-            // Use http.get to send a request to the bot's own server
-            http.get(url, (res) => {
-                // Log success or status
-                console.log(`Self-Ping successful. Status: ${res.statusCode}`);
-            }).on("error", (e) => {
-                // Log any errors (e.g., if the local server hasn't fully started yet)
-                console.error(`Self-Ping Error: ${e.message}`);
-            });
+            const res = await axios.get(url); // Uses axios for HTTPS support
+            console.log(`Self-Ping successful. Status: ${res.status}`);
         } catch (error) {
-            console.error(`Self-Ping Failed: ${error}`);
+            console.error(`Self-Ping Error: ${error.message}`);
         }
-    }, 180000); // Ping every 3 minutes (180,000 milliseconds)
+    }, 180000); 
 }
 
 async function setupDatabase() {
