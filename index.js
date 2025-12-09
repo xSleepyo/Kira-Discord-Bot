@@ -5,7 +5,16 @@ const http = require("http");
 const { PermissionFlagsBits, Events } = require("discord.js");
 const axios = require("axios");
 
-// --- Global Crash Handlers (NEW ADDITION) ---
+// *** START OF NEW AI CODE BLOCK ***
+const { GoogleGenAI } = require("@google/genai"); 
+
+// Initialize Gemini AI Client (Requires GEMINI_API_KEY environment variable)
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const SYSTEM_PROMPT =
+    "You are a friendly and helpful Discord bot named Kira Bot. Your primary function is to answer questions related to the game Rust, particularly concerning wipe schedules, base building, and server details. If a question is outside of the Rust topic, politely decline to answer, stating you are focused on Rust-related queries. Keep your answers concise and informative.";
+// *** END OF NEW AI CODE BLOCK ***
+
+// --- Global Crash Handlers (UNCHANGED) ---
 process.on("unhandledRejection", (error) => {
     // This logs errors from Promises that aren't caught (e.g., failed message sends)
     console.error("CRITICAL UNHANDLED PROMISE REJECTION:", error);
@@ -113,7 +122,7 @@ const token = process.env.TOKEN;
 // UPTIME AND DATABASE FUNCTIONS (UNCHANGED)
 // -------------------------------------------------------------
 
-// --- Server Setup (Replaces external keepAlive) ---
+// --- Server Setup (UNCHANGED) ---
 const app = express();
 
 function keepAlive() {
@@ -127,18 +136,36 @@ function keepAlive() {
     });
 }
 
-// --- Self-Pinging Function (UNCHANGED) ---
+// --- Self-Pinging Function (FIXED) ---
 function selfPing() {
+    // Determine the URL to ping. Use the environment variable if available (e.g., Render, Railway), 
+    // otherwise default to localhost or an assumed external URL.
     const url = process.env.RENDER_EXTERNAL_URL || `http://localhost:${process.env.PORT || 3000}`; 
 
     setInterval(async () => {
         try {
-            const res = await axios.get(url); // Uses axios for HTTPS support
+            // Use axios for robust HTTPS support (Fixes ERR_INVALID_PROTOCOL and syntax error)
+            const res = await axios.get(url); 
+            
+            // Log success or status
             console.log(`Self-Ping successful. Status: ${res.status}`);
         } catch (error) {
+            // Log any errors (e.g., if the server is temporarily down)
             console.error(`Self-Ping Error: ${error.message}`);
         }
-    }, 180000); 
+    }, 180000); // Ping every 3 minutes (180,000 milliseconds)
+}
+// ------------------------------------
+
+// --- Helper function for ship command (Assuming it exists, if not, add it here) ---
+function generateShipName(name1, name2) {
+    const len1 = Math.floor(name1.length / 2);
+    const len2 = Math.floor(name2.length / 2);
+
+    const firstHalf = name1.substring(0, len1);
+    const secondHalf = name2.substring(len2);
+
+    return firstHalf + secondHalf;
 }
 
 async function setupDatabase() {
@@ -602,7 +629,7 @@ async function startEmbedConversation(interaction) {
 client.on("interactionCreate", async (interaction) => {
     if (!interaction.isCommand()) return;
 
-    // --- /embed Handler (NEW INTERACTIVE) ---
+    // --- /embed Handler (UNCHANGED) ---
     if (interaction.commandName === "embed") {
         if (
             !interaction.member.permissions.has(
@@ -774,7 +801,7 @@ client.on("interactionCreate", async (interaction) => {
 });
 
 // -------------------------------------------------------------
-// Discord Event Listeners
+// Discord Event Listeners (UNCHANGED)
 // -------------------------------------------------------------
 
 // --- Reaction Role Cleanup on Message Delete (UNCHANGED) ---
@@ -853,7 +880,7 @@ client.on("messageReactionRemove", (reaction, user) =>
 );
 
 // -------------------------------------------------------------
-// Handle Text Messages (UNCHANGED)
+// Handle Text Messages (FIXED COMMAND STRUCTURE)
 // -------------------------------------------------------------
 client.on("messageCreate", async (message) => {
     if (message.author.bot) return;
@@ -905,8 +932,43 @@ client.on("messageCreate", async (message) => {
     const args = rawArgs.split(/ +/);
     const commandName = args.shift().toLowerCase();
 
-    // --- Command: .help (UNCHANGED) ---
-    if (commandName === "help") {
+    // --- Command: .ask (AI-Powered Knowledge Base) - MUST BE FIRST 'if' ---
+    if (commandName === "ask") {
+        const userQuestion = args.join(" ");
+        if (!userQuestion) {
+            message.channel.send(
+                "Please provide a question after the command, e.g., `.ask when is the next wipe?`",
+            );
+            return;
+        }
+
+        const thinkingMessage = await message.channel.send("🤖 Thinking...");
+
+        try {
+            const response = await ai.models.generateContent({
+                model: "gemini-2.5-flash",
+                contents: [
+                    { role: "system", parts: [{ text: SYSTEM_PROMPT }] },
+                    { role: "user", parts: [{ text: userQuestion }] },
+                ],
+            });
+
+            const aiResponse = response.text;
+
+            await thinkingMessage.edit(
+                `**${message.author.username} asked:** *${userQuestion}*\n\n**Kira Bot:** ${aiResponse}`,
+            );
+        } catch (error) {
+            console.error("Error communicating with Gemini AI:", error);
+            await thinkingMessage.edit(
+                "Sorry, my AI brain is offline right now. Try again later! (Check if GEMINI_API_KEY is set)",
+            );
+        }
+    }
+    // --- End of .ask command ---
+    
+    // --- Command: .help (NOW an 'else if') ---
+    else if (commandName === "help") {
         const helpEmbed = new Discord.EmbedBuilder()
             .setColor(0x3498db)
             .setTitle("Kira Bot Commands")
@@ -924,7 +986,7 @@ client.on("messageCreate", async (message) => {
                 },
                 {
                     name: "General Utility",
-                    value: "`.status` - Check the bot's ping and uptime.\n`.userinfo [user]` - Get information about a user.",
+                    value: "`.ask [question]` - Ask the AI a Rust-related question. \n`.status` - Check the bot's ping and uptime.\n`.userinfo [user]` - Get information about a user.",
                     inline: false,
                 },
                 {
@@ -943,7 +1005,7 @@ client.on("messageCreate", async (message) => {
         message.channel.send({ embeds: [helpEmbed] });
     }
 
-    // --- Command: .ship (UNCHANGED) ---
+    // --- Command: .ship (NEXT ELSE IF) ---
     else if (commandName === "ship") {
         const user1 = message.author;
 
@@ -1006,7 +1068,7 @@ client.on("messageCreate", async (message) => {
         message.channel.send({ embeds: [shipEmbed] });
     }
 
-    // --- Command: .purge (UNCHANGED) ---
+    // --- Command: .purge (NEXT ELSE IF) ---
     else if (commandName === "purge") {
         if (
             !message.member.permissions.has(
@@ -1041,13 +1103,13 @@ client.on("messageCreate", async (message) => {
         }
     }
 
-    // --- Command: .flip (UNCHANGED) ---
+    // --- Command: .flip (NEXT ELSE IF) ---
     else if (commandName === "flip") {
         const outcome = Math.random() < 0.5 ? "Heads" : "Tails";
         message.channel.send(`🪙 The coin landed on **${outcome}**!`);
     }
 
-    // --- Command: .userinfo (UNCHANGED) ---
+    // --- Command: .userinfo (NEXT ELSE IF) ---
     else if (commandName === "userinfo") {
         const member = message.mentions.members.first() || message.member;
         const user = member.user;
@@ -1081,7 +1143,7 @@ client.on("messageCreate", async (message) => {
         message.channel.send({ embeds: [userInfoEmbed] });
     }
 
-    // --- Command: .8ball (UNCHANGED) ---
+    // --- Command: .8ball (NEXT ELSE IF) ---
     else if (commandName === "8ball") {
         const question = args.join(" ");
 
@@ -1108,7 +1170,7 @@ client.on("messageCreate", async (message) => {
         message.channel.send({ embeds: [eightBallEmbed] });
     }
 
-    // --- Command: .status (UNCHANGED) ---
+    // --- Command: .status (NEXT ELSE IF) ---
     else if (commandName === "status") {
         let totalSeconds = client.uptime / 1000;
         let days = Math.floor(totalSeconds / 86400);
@@ -1128,17 +1190,17 @@ client.on("messageCreate", async (message) => {
             .addFields(
                 {
                     name: "**Connection**",
-                    value: "```ansi\n[0;32mOnline\n```",
+                    value: "```ansi\n [0;32mOnline\n```",
                     inline: true,
                 },
                 {
                     name: "**Ping**",
-                    value: `\`\`\`ansi\n[0;32m${client.ws.ping}ms\n\`\`\``,
+                    value: `\`\`\`ansi\n [0;32m${client.ws.ping}ms\n\`\`\``,
                     inline: true,
                 },
                 {
                     name: "**Uptime**",
-                    value: `\`\`\`ansi\n[0;32m${uptimeString}\n\`\`\``,
+                    value: `\`\`\`ansi\n [0;32m${uptimeString}\n\`\`\``,
                     inline: false,
                 },
             );
@@ -1146,7 +1208,7 @@ client.on("messageCreate", async (message) => {
         message.channel.send({ embeds: [statusEmbed] });
     }
 
-    // --- Command: .joke (UNCHANGED) ---
+    // --- Command: .joke (NEXT ELSE IF) ---
     else if (commandName === "joke") {
         try {
             const response = await axios.get(
@@ -1169,7 +1231,7 @@ client.on("messageCreate", async (message) => {
         }
     }
 
-    // --- Simple Aliases: Hello! or Hey! (UNCHANGED) ---
+    // --- Simple Aliases: Hello! or Hey! (NEXT ELSE IF) ---
     else if (command === "hello!" || command === "hey!") {
         message.channel.send("Hey!, how are you?");
     }
