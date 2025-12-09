@@ -129,11 +129,23 @@ function keepAlive() {
 
 // --- Self-Pinging Function (UNCHANGED) ---
 function selfPing() {
-    // Determine the URL to ping. Use the environment variable if available (e.g., Render, Railway),
+    // Determine the URL to ping. Use the environment variable if available (e.g., Render, Railway), 
     // otherwise default to localhost or an assumed external URL.
-    const url =
-        process.env.RENDER_EXTERNAL_URL ||
-        `http://localhost:${process.env.PORT || 3000}`;
+    const url = process.env.RENDER_EXTERNAL_URL || `http://localhost:${process.env.PORT || 3000}`; 
+
+    setInterval(async () => {
+        try {
+            // *** CHANGE IS HERE: Use axios for robust HTTPS support ***
+            const res = await axios.get(url); 
+            
+            // Log success or status
+            console.log(`Self-Ping successful. Status: ${res.status}`);
+        } catch (error) {
+            // Log any errors (e.g., if the server is temporarily down)
+            console.error(`Self-Ping Error: ${error.message}`);
+        }
+    }, 180000); // Ping every 3 minutes (180,000 milliseconds)
+}
 
     setInterval(() => {
         try {
