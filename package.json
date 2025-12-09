@@ -1,0 +1,20 @@
+{
+  "name": "kira-bot",
+  "version": "1.0.0",
+  "description": "Kira Bot by xSleepyo",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@google/genai": "^1.32.0",
+    "@types/node": "^22.13.11",
+    "axios": "^1.13.2",
+    "discord.js": "^14.25.1",
+    "express": "^5.2.1",
+    "pg": "^8.16.3"
+  }
+}
