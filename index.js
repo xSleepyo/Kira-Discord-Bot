@@ -5,14 +5,14 @@ const http = require("http");
 const { PermissionFlagsBits, Events } = require("discord.js");
 const axios = require("axios");
 
-// *** START OF NEW AI CODE BLOCK (CRITICAL FIX) ***
+// *** START OF AI CODE BLOCK (CRITICAL FIX) ***
 const { GoogleGenAI } = require("@google/genai"); 
 
 // Initialize Gemini AI Client (Requires GEMINI_API_KEY environment variable)
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const SYSTEM_PROMPT =
     "You are a friendly and helpful Discord bot named Kira Bot. Your primary function is to answer questions related to the game Rust, particularly concerning wipe schedules, base building, and server details. If a question is outside of the Rust topic, politely decline to answer, stating you are focused on Rust-related queries. Keep your answers concise and informative.";
-// *** END OF NEW AI CODE BLOCK ***
+// *** END OF AI CODE BLOCK ***
 
 // --- Global Crash Handlers (UNCHANGED) ---
 process.on("unhandledRejection", (error) => {
@@ -119,7 +119,7 @@ const client = new Discord.Client({
 const token = process.env.TOKEN;
 
 // -------------------------------------------------------------
-// UPTIME AND DATABASE FUNCTIONS (UNCHANGED)
+// UPTIME AND DATABASE FUNCTIONS 
 // -------------------------------------------------------------
 
 // --- Server Setup (UNCHANGED) ---
@@ -136,20 +136,17 @@ function keepAlive() {
     });
 }
 
-// --- Self-Pinging Function (FIXED) ---
+// --- Self-Pinging Function (CRITICAL FIX: Removed duplication and invalid http call) ---
 function selfPing() {
     // Determine the URL to ping. Use the environment variable if available (e.g., Render, Railway), 
     // otherwise default to localhost or an assumed external URL.
-    const url =
-        process.env.RENDER_EXTERNAL_URL ||
-        `http://localhost:${process.env.PORT || 3000}`;
+    const url = process.env.RENDER_EXTERNAL_URL || `http://localhost:${process.env.PORT || 3000}`; 
 
     // Use axios within setInterval to handle HTTPS pings correctly
     setInterval(async () => {
         try {
-            // Use axios for robust HTTPS support (Fixes ERR_INVALID_PROTOCOL and prevents the old syntax error)
-            const res = await axios.get(url);
-
+            const res = await axios.get(url); 
+            
             // Log success or status
             console.log(`Self-Ping successful. Status: ${res.status}`);
         } catch (error) {
@@ -158,9 +155,8 @@ function selfPing() {
         }
     }, 180000); // Ping every 3 minutes (180,000 milliseconds)
 }
-// ------------------------------------
 
-// --- Helper function for ship command (Assuming it exists, if not, add it here) ---
+// --- Helper function for ship command (Assuming it exists) ---
 function generateShipName(name1, name2) {
     const len1 = Math.floor(name1.length / 2);
     const len2 = Math.floor(name2.length / 2);
@@ -883,7 +879,7 @@ client.on("messageReactionRemove", (reaction, user) =>
 );
 
 // -------------------------------------------------------------
-// Handle Text Messages (FIXED COMMAND STRUCTURE)
+// Handle Text Messages (FIXED COMMAND STRUCTURE & .ask ADDED)
 // -------------------------------------------------------------
 client.on("messageCreate", async (message) => {
     if (message.author.bot) return;
@@ -935,7 +931,7 @@ client.on("messageCreate", async (message) => {
     const args = rawArgs.split(/ +/);
     const commandName = args.shift().toLowerCase();
 
-    // --- Command: .ask (AI-Powered Knowledge Base) - MUST BE FIRST 'if' ---
+    // --- Command: .ask (AI-Powered Knowledge Base) - ADDED ---
     if (commandName === "ask") {
         const userQuestion = args.join(" ");
         if (!userQuestion) {
