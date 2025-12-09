@@ -133,20 +133,6 @@ function selfPing() {
     // otherwise default to localhost or an assumed external URL.
     const url = process.env.RENDER_EXTERNAL_URL || `http://localhost:${process.env.PORT || 3000}`; 
 
-    setInterval(async () => {
-        try {
-            // *** CHANGE IS HERE: Use axios for robust HTTPS support ***
-            const res = await axios.get(url); 
-            
-            // Log success or status
-            console.log(`Self-Ping successful. Status: ${res.status}`);
-        } catch (error) {
-            // Log any errors (e.g., if the server is temporarily down)
-            console.error(`Self-Ping Error: ${error.message}`);
-        }
-    }, 180000); // Ping every 3 minutes (180,000 milliseconds)
-}
-
     setInterval(() => {
         try {
             // Use http.get to send a request to the bot's own server
