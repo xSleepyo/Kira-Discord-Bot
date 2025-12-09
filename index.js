@@ -5,7 +5,7 @@ const http = require("http");
 const { PermissionFlagsBits, Events } = require("discord.js");
 const axios = require("axios");
 
-// *** START OF NEW AI CODE BLOCK ***
+// *** START OF NEW AI CODE BLOCK (CRITICAL FIX) ***
 const { GoogleGenAI } = require("@google/genai"); 
 
 // Initialize Gemini AI Client (Requires GEMINI_API_KEY environment variable)
@@ -140,13 +140,16 @@ function keepAlive() {
 function selfPing() {
     // Determine the URL to ping. Use the environment variable if available (e.g., Render, Railway), 
     // otherwise default to localhost or an assumed external URL.
-    const url = process.env.RENDER_EXTERNAL_URL || `http://localhost:${process.env.PORT || 3000}`; 
+    const url =
+        process.env.RENDER_EXTERNAL_URL ||
+        `http://localhost:${process.env.PORT || 3000}`;
 
+    // Use axios within setInterval to handle HTTPS pings correctly
     setInterval(async () => {
         try {
-            // Use axios for robust HTTPS support (Fixes ERR_INVALID_PROTOCOL and syntax error)
-            const res = await axios.get(url); 
-            
+            // Use axios for robust HTTPS support (Fixes ERR_INVALID_PROTOCOL and prevents the old syntax error)
+            const res = await axios.get(url);
+
             // Log success or status
             console.log(`Self-Ping successful. Status: ${res.status}`);
         } catch (error) {
@@ -965,8 +968,7 @@ client.on("messageCreate", async (message) => {
             );
         }
     }
-    // --- End of .ask command ---
-    
+
     // --- Command: .help (NOW an 'else if') ---
     else if (commandName === "help") {
         const helpEmbed = new Discord.EmbedBuilder()
