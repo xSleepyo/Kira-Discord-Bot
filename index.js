@@ -1,20 +1,11 @@
 const Discord = require("discord.js");
 const { Client } = require("pg");
 const express = require("express");
-const http = require("http");
 const { PermissionFlagsBits, Events } = require("discord.js");
 const axios = require("axios");
+const { GoogleGenerativeAI } = require("@google/genai"); // NEW: Import Gemini AI library
 
-// *** START OF AI CODE BLOCK (CRITICAL FIX) ***
-const { GoogleGenAI } = require("@google/genai"); 
-
-// Initialize Gemini AI Client (Requires GEMINI_API_KEY environment variable)
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-const SYSTEM_PROMPT =
-    "You are a friendly and helpful Discord bot named Kira Bot. Your primary function is to answer questions related to the game Rust, particularly concerning wipe schedules, base building, and server details. If a question is outside of the Rust topic, politely decline to answer, stating you are focused on Rust-related queries. Keep your answers concise and informative.";
-// *** END OF AI CODE BLOCK ***
-
-// --- Global Crash Handlers (UNCHANGED) ---
+// --- Global Crash Handlers (NEW ADDITION) ---
 process.on("unhandledRejection", (error) => {
     // This logs errors from Promises that aren't caught (e.g., failed message sends)
     console.error("CRITICAL UNHANDLED PROMISE REJECTION:", error);
@@ -98,6 +89,10 @@ const db = new Client({
     },
 });
 
+// NEW: Initialize the Gemini AI client
+const ai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const aiModel = "gemini-2.5-flash"; // A good, fast model for chat
+
 // Global variables for in-memory access (UNCHANGED)
 let countingChannelId = null;
 let nextNumber = 1;
@@ -119,10 +114,10 @@ const client = new Discord.Client({
 const token = process.env.TOKEN;
 
 // -------------------------------------------------------------
-// UPTIME AND DATABASE FUNCTIONS 
+// UPTIME AND DATABASE FUNCTIONS (UNCHANGED)
 // -------------------------------------------------------------
 
-// --- Server Setup (UNCHANGED) ---
+// --- Server Setup (Replaces external keepAlive) ---
 const app = express();
 
 function keepAlive() {
@@ -136,15 +131,15 @@ function keepAlive() {
     });
 }
 
-// --- Self-Pinging Function (CRITICAL FIX: Removed duplication and invalid http call) ---
+// --- Self-Pinging Function (CLEANED UP REDUNDANT LOOP) ---
 function selfPing() {
     // Determine the URL to ping. Use the environment variable if available (e.g., Render, Railway), 
     // otherwise default to localhost or an assumed external URL.
     const url = process.env.RENDER_EXTERNAL_URL || `http://localhost:${process.env.PORT || 3000}`; 
 
-    // Use axios within setInterval to handle HTTPS pings correctly
     setInterval(async () => {
         try {
+            // Use axios for robust HTTPS support
             const res = await axios.get(url); 
             
             // Log success or status
@@ -154,17 +149,6 @@ function selfPing() {
             console.error(`Self-Ping Error: ${error.message}`);
         }
     }, 180000); // Ping every 3 minutes (180,000 milliseconds)
-}
-
-// --- Helper function for ship command (Assuming it exists) ---
-function generateShipName(name1, name2) {
-    const len1 = Math.floor(name1.length / 2);
-    const len2 = Math.floor(name2.length / 2);
-
-    const firstHalf = name1.substring(0, len1);
-    const secondHalf = name2.substring(len2);
-
-    return firstHalf + secondHalf;
 }
 
 async function setupDatabase() {
@@ -628,7 +612,7 @@ async function startEmbedConversation(interaction) {
 client.on("interactionCreate", async (interaction) => {
     if (!interaction.isCommand()) return;
 
-    // --- /embed Handler (UNCHANGED) ---
+    // --- /embed Handler (NEW INTERACTIVE) ---
     if (interaction.commandName === "embed") {
         if (
             !interaction.member.permissions.has(
@@ -800,7 +784,7 @@ client.on("interactionCreate", async (interaction) => {
 });
 
 // -------------------------------------------------------------
-// Discord Event Listeners (UNCHANGED)
+// Discord Event Listeners
 // -------------------------------------------------------------
 
 // --- Reaction Role Cleanup on Message Delete (UNCHANGED) ---
@@ -879,7 +863,7 @@ client.on("messageReactionRemove", (reaction, user) =>
 );
 
 // -------------------------------------------------------------
-// Handle Text Messages (FIXED COMMAND STRUCTURE & .ask ADDED)
+// Handle Text Messages (UNCHANGED)
 // -------------------------------------------------------------
 client.on("messageCreate", async (message) => {
     if (message.author.bot) return;
@@ -931,41 +915,65 @@ client.on("messageCreate", async (message) => {
     const args = rawArgs.split(/ +/);
     const commandName = args.shift().toLowerCase();
 
-    // --- Command: .ask (AI-Powered Knowledge Base) - ADDED ---
+    // --- Command: .ask (NEW AI COMMAND) ---
     if (commandName === "ask") {
-        const userQuestion = args.join(" ");
-        if (!userQuestion) {
-            message.channel.send(
-                "Please provide a question after the command, e.g., `.ask when is the next wipe?`",
-            );
-            return;
-        }
+        const userPrompt = args.join(" ");
 
-        const thinkingMessage = await message.channel.send("🤖 Thinking...");
+        if (!userPrompt) {
+            return message.channel.send("Please provide a question for the AI! Example: `.ask what is the capital of france`");
+        }
 
         try {
-            const response = await ai.models.generateContent({
-                model: "gemini-2.5-flash",
-                contents: [
-                    { role: "system", parts: [{ text: SYSTEM_PROMPT }] },
-                    { role: "user", parts: [{ text: userQuestion }] },
-                ],
+            await message.channel.sendTyping(); // Show the bot is thinking
+
+            // The 'chat' approach is best for potentially multi-turn conversations
+            const chat = ai.chats.create({ model: aiModel });
+
+            // FIX: Ensure the contents array is correctly structured with role: "user"
+            const result = await chat.sendMessage({
+                contents: [{ role: "user", parts: [{ text: userPrompt }] }]
             });
 
-            const aiResponse = response.text;
+            const responseText = result.text.trim();
 
-            await thinkingMessage.edit(
-                `**${message.author.username} asked:** *${userQuestion}*\n\n**Kira Bot:** ${aiResponse}`,
-            );
+            const aiEmbed = new Discord.EmbedBuilder()
+                .setColor(0x0000ff)
+                .setTitle(`🤖 AI Response:`)
+                .setDescription(responseText)
+                .setFooter({ text: `Question by ${message.author.tag}` });
+
+            // Send response, handling message length limits
+            if (responseText.length > 4096) {
+                const chunks = Discord.splitMessage(responseText, {
+                    maxLength: 2000,
+                    char: "\n",
+                    prepend: "...",
+                    append: "...",
+                });
+                for (const chunk of chunks) {
+                    message.channel.send(chunk);
+                }
+            } else {
+                message.channel.send({ embeds: [aiEmbed] });
+            }
+
         } catch (error) {
             console.error("Error communicating with Gemini AI:", error);
-            await thinkingMessage.edit(
-                "Sorry, my AI brain is offline right now. Try again later! (Check if GEMINI_API_KEY is set)",
-            );
+
+            let errorMessage = "❌ Error communicating with the AI service.";
+
+            if (error.message.includes("API_KEY_INVALID")) {
+                errorMessage = "❌ AI API Error: The `GEMINI_API_KEY` is invalid or missing. Please check your environment variables.";
+            } else if (error.message.includes("role")) {
+                // Should be fixed, but a helpful message if it somehow persists
+                 errorMessage = "❌ AI API Error: Request format is incorrect (Invalid role/content).";
+            }
+
+            message.channel.send(errorMessage);
         }
     }
-
-    // --- Command: .help (NOW an 'else if') ---
+    
+    // --- Command: .help (UNCHANGED) ---
     else if (commandName === "help") {
         const helpEmbed = new Discord.EmbedBuilder()
             .setColor(0x3498db)
@@ -984,7 +992,7 @@ client.on("messageCreate", async (message) => {
                 },
                 {
                     name: "General Utility",
-                    value: "`.ask [question]` - Ask the AI a Rust-related question. \n`.status` - Check the bot's ping and uptime.\n`.userinfo [user]` - Get information about a user.",
+                    value: "`.ask [question]` - Ask the Gemini AI a question.\n`.status` - Check the bot's ping and uptime.\n`.userinfo [user]` - Get information about a user.",
                     inline: false,
                 },
                 {
@@ -1003,7 +1011,7 @@ client.on("messageCreate", async (message) => {
         message.channel.send({ embeds: [helpEmbed] });
     }
 
-    // --- Command: .ship (NEXT ELSE IF) ---
+    // --- Command: .ship (UNCHANGED) ---
     else if (commandName === "ship") {
         const user1 = message.author;
 
@@ -1066,7 +1074,7 @@ client.on("messageCreate", async (message) => {
         message.channel.send({ embeds: [shipEmbed] });
     }
 
-    // --- Command: .purge (NEXT ELSE IF) ---
+    // --- Command: .purge (UNCHANGED) ---
     else if (commandName === "purge") {
         if (
             !message.member.permissions.has(
@@ -1101,13 +1109,13 @@ client.on("messageCreate", async (message) => {
         }
     }
 
-    // --- Command: .flip (NEXT ELSE IF) ---
+    // --- Command: .flip (UNCHANGED) ---
     else if (commandName === "flip") {
         const outcome = Math.random() < 0.5 ? "Heads" : "Tails";
         message.channel.send(`🪙 The coin landed on **${outcome}**!`);
     }
 
-    // --- Command: .userinfo (NEXT ELSE IF) ---
+    // --- Command: .userinfo (UNCHANGED) ---
     else if (commandName === "userinfo") {
         const member = message.mentions.members.first() || message.member;
         const user = member.user;
@@ -1141,7 +1149,7 @@ client.on("messageCreate", async (message) => {
         message.channel.send({ embeds: [userInfoEmbed] });
     }
 
-    // --- Command: .8ball (NEXT ELSE IF) ---
+    // --- Command: .8ball (UNCHANGED) ---
     else if (commandName === "8ball") {
         const question = args.join(" ");
 
@@ -1168,7 +1176,7 @@ client.on("messageCreate", async (message) => {
         message.channel.send({ embeds: [eightBallEmbed] });
     }
 
-    // --- Command: .status (NEXT ELSE IF) ---
+    // --- Command: .status (UNCHANGED) ---
     else if (commandName === "status") {
         let totalSeconds = client.uptime / 1000;
         let days = Math.floor(totalSeconds / 86400);
@@ -1206,7 +1214,7 @@ client.on("messageCreate", async (message) => {
         message.channel.send({ embeds: [statusEmbed] });
     }
 
-    // --- Command: .joke (NEXT ELSE IF) ---
+    // --- Command: .joke (UNCHANGED) ---
     else if (commandName === "joke") {
         try {
             const response = await axios.get(
@@ -1229,7 +1237,7 @@ client.on("messageCreate", async (message) => {
         }
     }
 
-    // --- Simple Aliases: Hello! or Hey! (NEXT ELSE IF) ---
+    // --- Simple Aliases: Hello! or Hey! (UNCHANGED) ---
     else if (command === "hello!" || command === "hey!") {
         message.channel.send("Hey!, how are you?");
     }
