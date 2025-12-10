@@ -29,6 +29,11 @@ const userEmbedDrafts = {};
 // --- CRITICAL FIX: FLAG TO PREVENT DOUBLE INITIALIZATION / DOUBLE PROCESSES ---
 let botInitialized = false;
 
+// --- STATUS COMMAND COOLDOWN LOCK ---
+// Used to block the second bot instance from executing the command immediately after the first.
+const statusCooldown = new Set();
+const COOLDOWN_TIME = 2000; // 2 seconds
+
 // ANSI Color Map
 const COLOR_MAP = {
     RED: 0xff0000,
@@ -213,7 +218,7 @@ async function saveState(channelId, nextNum) {
 }
 
 async function initializeBot() {
-    // --- CRITICAL FIX: PROCESS-LEVEL GUARD (prevents same process initialization) ---
+    // --- PROCESS-LEVEL GUARD (prevents same process initialization) ---
     if (botInitialized) {
         console.log("Bot initialization skipped: another process is likely running.");
         return;
@@ -239,7 +244,6 @@ async function initializeBot() {
 // -------------------------------------------------------------
 // Handle Text Messages - GLOBAL LISTENER
 // -------------------------------------------------------------
-// This listener handles all prefix commands (.help, .status, etc.)
 client.on("messageCreate", async (message) => {
     if (message.author.bot) return;
 
@@ -493,8 +497,20 @@ client.on("messageCreate", async (message) => {
         message.channel.send({ embeds: [eightBallEmbed] });
     }
 
-    // --- Command: .status (UPDATED WITH SERVERS & MEMORY) ---
+    // --- Command: .status (NOW WITH COOLDOWN LOCK) ---
     else if (commandName === "status") {
+        // --- COOLDOWN CHECK ---
+        if (statusCooldown.has(message.channel.id)) {
+            // Likely the duplicate execution from the second process, so we ignore it.
+            return; 
+        }
+        
+        // Lock the channel for 2 seconds
+        statusCooldown.add(message.channel.id);
+        setTimeout(() => {
+            statusCooldown.delete(message.channel.id);
+        }, COOLDOWN_TIME);
+
         // Uptime calculation (existing)
         let totalSeconds = client.uptime / 1000;
         let days = Math.floor(totalSeconds / 86400);
