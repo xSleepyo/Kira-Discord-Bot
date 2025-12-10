@@ -4,7 +4,8 @@ const express = require("express");
 const http = require("http");
 const { PermissionFlagsBits, Events } = require("discord.js");
 const axios = require("axios");
-const { GoogleGenerativeAI } = require("@google/genai"); // FIX: Correctly import the class
+// FIX: Import the entire module object for a robust CommonJS workaround to prevent "is not a constructor" error.
+const geminiModule = require("@google/genai"); 
 
 // --- Global Crash Handlers ---
 process.on("unhandledRejection", (error) => {
@@ -42,8 +43,11 @@ const COLOR_MAP = {
     DEFAULT: 0x3498db,
 };
 
-// --- Generative AI Initialization ---
+// --- Generative AI Initialization (FIXED FOR CONSTRUCTOR ERROR) ---
 let ai = null;
+// Determine the correct constructor: use the named export if available, otherwise assume the entire module is the constructor.
+const GoogleGenerativeAI = geminiModule.GoogleGenerativeAI || geminiModule;
+
 if (process.env.GEMINI_API_KEY) {
     try {
         const aiInstance = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -75,7 +79,7 @@ const ANSI_FOREGROUND_CODES = {
     RESET: "0",
 };
 
-// --- Ship Name Generator (Restored for .ship command) ---
+// --- Ship Name Generator (Required for .ship command) ---
 function generateShipName(name1, name2) {
     const len1 = name1.length;
     const len2 = name2.length;
@@ -161,7 +165,7 @@ function keepAlive() {
     });
 }
 
-// --- Self-Pinging Function (FIXED: Removing Duplicate/Incorrect Code) ---
+// --- Self-Pinging Function (CRITICALLY FIXED) ---
 function selfPing() {
     // Determine the URL to ping. Use the environment variable if available (e.g., Render, Railway), 
     // otherwise default to localhost or an assumed external URL.
@@ -947,10 +951,10 @@ client.on("messageCreate", async (message) => {
     const args = rawArgs.split(/ +/);
     const commandName = args.shift().toLowerCase();
 
-    // --- Command: .ask [prompt] (Generative AI - RESTORED) ---
+    // --- Command: .ask [prompt] (Generative AI - FIXED) ---
     if (commandName === "ask") {
         if (!ai) {
-            return message.channel.send("❌ AI command is disabled. The `GEMINI_API_KEY` environment variable is missing.");
+            return message.channel.send("❌ AI command is disabled. The `GEMINI_API_KEY` environment variable is missing or initialization failed.");
         }
 
         const prompt = args.join(" ");
@@ -967,7 +971,8 @@ client.on("messageCreate", async (message) => {
             const history = (await message.channel.messages.fetch({ limit: 5 }))
                 .map(msg => ({
                     role: msg.author.bot ? "model" : "user",
-                    parts: [{ text: msg.content.startsWith(PREFIX + "ask") ? msg.content.substring(4).trim() : msg.content }]
+                    // Only send the actual message content, strip the command from the current message
+                    parts: [{ text: msg.content.startsWith(PREFIX + "ask") ? msg.content.substring((PREFIX + "ask").length).trim() : msg.content }]
                 }))
                 .filter(msg => msg.parts[0].text.length > 0)
                 .reverse(); // Reverse to get chronological order
@@ -993,7 +998,11 @@ client.on("messageCreate", async (message) => {
 
         } catch (error) {
             console.error("Gemini API Error:", error);
-            message.channel.send("❌ Sorry, I ran into an error while processing your request. Please try again later.");
+            if (error.code === 400 && error.message.includes("INVALID_ARGUMENT")) {
+                message.channel.send("❌ AI Error: The conversation context may be invalid. Please try a simple, new question.");
+            } else {
+                message.channel.send("❌ Sorry, I ran into an error while processing your request. Please try again later.");
+            }
         } finally {
             // Stop typing after the response is sent or if an error occurred
             await typingPromise.then(typing => typing.delete().catch(() => {})).catch(() => {});
