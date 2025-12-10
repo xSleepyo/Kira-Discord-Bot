@@ -1,19 +1,21 @@
 const Discord = require("discord.js");
 const { Client } = require("pg");
 const express = require("express");
-// REMOVED: const http = require("http"); // REMOVED the redundant http import
+const http = require("http");
 const { PermissionFlagsBits, Events } = require("discord.js");
 const axios = require("axios");
-// FIX A: Added the missing import for the Gemini SDK
-const { GoogleGenerativeAI } = require("@google/genai"); 
+const { GoogleGenerativeAI } = require("@google/genai"); // FIX: Correctly import the class
 
-// --- Global Crash Handlers (UNCHANGED) ---
+// --- Global Crash Handlers (NEW ADDITION) ---
 process.on("unhandledRejection", (error) => {
+    // This logs errors from Promises that aren't caught (e.g., failed message sends)
     console.error("CRITICAL UNHANDLED PROMISE REJECTION:", error);
 });
 
 process.on("uncaughtException", (error) => {
+    // This logs synchronous errors that aren't wrapped in a try/catch block
     console.error("CRITICAL UNCAUGHT EXCEPTION:", error);
+    // Best practice is to exit the process after an uncaught exception
     try {
         client.destroy();
     } catch (e) {
@@ -88,11 +90,6 @@ const db = new Client({
     },
 });
 
-// FIX A: Initialize the Gemini AI client
-const ai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const aiModel = "gemini-2.5-flash"; // A good, fast model for chat
-
-
 // Global variables for in-memory access (UNCHANGED)
 let countingChannelId = null;
 let nextNumber = 1;
@@ -114,10 +111,10 @@ const client = new Discord.Client({
 const token = process.env.TOKEN;
 
 // -------------------------------------------------------------
-// UPTIME AND DATABASE FUNCTIONS 
+// UPTIME AND DATABASE FUNCTIONS (UNCHANGED)
 // -------------------------------------------------------------
 
-// --- Server Setup (UNCHANGED) ---
+// --- Server Setup (Replaces external keepAlive) ---
 const app = express();
 
 function keepAlive() {
@@ -131,7 +128,7 @@ function keepAlive() {
     });
 }
 
-// --- Self-Pinging Function (FIX B: Removed the duplicate loop and syntax error) ---
+// --- Self-Pinging Function (FIXED: Removed duplication/syntax error) ---
 function selfPing() {
     // Determine the URL to ping. Use the environment variable if available (e.g., Render, Railway), 
     // otherwise default to localhost or an assumed external URL.
@@ -139,7 +136,7 @@ function selfPing() {
 
     setInterval(async () => {
         try {
-            // Use axios for robust HTTP/HTTPS support
+            // Use axios for robust HTTPS support
             const res = await axios.get(url); 
             
             // Log success or status
@@ -150,6 +147,7 @@ function selfPing() {
         }
     }, 180000); // Ping every 3 minutes (180,000 milliseconds)
 }
+// ------------------------------------------
 
 
 async function setupDatabase() {
@@ -613,7 +611,7 @@ async function startEmbedConversation(interaction) {
 client.on("interactionCreate", async (interaction) => {
     if (!interaction.isCommand()) return;
 
-    // --- /embed Handler (UNCHANGED) ---
+    // --- /embed Handler (NEW INTERACTIVE) ---
     if (interaction.commandName === "embed") {
         if (
             !interaction.member.permissions.has(
@@ -785,7 +783,7 @@ client.on("interactionCreate", async (interaction) => {
 });
 
 // -------------------------------------------------------------
-// Discord Event Listeners (UNCHANGED)
+// Discord Event Listeners
 // -------------------------------------------------------------
 
 // --- Reaction Role Cleanup on Message Delete (UNCHANGED) ---
@@ -864,7 +862,7 @@ client.on("messageReactionRemove", (reaction, user) =>
 );
 
 // -------------------------------------------------------------
-// Handle Text Messages 
+// Handle Text Messages (UNCHANGED)
 // -------------------------------------------------------------
 client.on("messageCreate", async (message) => {
     if (message.author.bot) return;
@@ -916,63 +914,8 @@ client.on("messageCreate", async (message) => {
     const args = rawArgs.split(/ +/);
     const commandName = args.shift().toLowerCase();
 
-    // --- Command: .ask (UPDATED with correct API payload) ---
-    if (commandName === "ask") {
-        const userPrompt = args.join(" ");
-
-        if (!userPrompt) {
-            return message.channel.send("Please provide a question for the AI! Example: `.ask what is the capital of france`");
-        }
-
-        try {
-            await message.channel.sendTyping(); // Show the bot is thinking
-
-            // FIX C: Correctly structure the content for the sendMessage method
-            const response = await ai.models.generateContent({
-                model: aiModel,
-                contents: [{ role: "user", parts: [{ text: userPrompt }] }]
-            });
-
-            const responseText = response.text.trim();
-
-            const aiEmbed = new Discord.EmbedBuilder()
-                .setColor(0x0000ff)
-                .setTitle(`🤖 AI Response:`)
-                .setDescription(responseText)
-                .setFooter({ text: `Question by ${message.author.tag}` });
-
-            // Send response, handling message length limits
-            if (responseText.length > 4096) {
-                const chunks = Discord.splitMessage(responseText, {
-                    maxLength: 2000,
-                    char: "\n",
-                    prepend: "...",
-                    append: "...",
-                });
-                for (const chunk of chunks) {
-                    message.channel.send(chunk);
-                }
-            } else {
-                message.channel.send({ embeds: [aiEmbed] });
-            }
-
-        } catch (error) {
-            console.error("Error communicating with Gemini AI:", error);
-
-            let errorMessage = "❌ Error communicating with the AI service.";
-
-            if (error.message.includes("API_KEY_INVALID")) {
-                errorMessage = "❌ AI API Error: The `GEMINI_API_KEY` is invalid or missing. Please check your environment variables.";
-            } else if (error.message.includes("role")) {
-                 errorMessage = "❌ AI API Error: Request format is incorrect. Contact the developer.";
-            }
-
-            message.channel.send(errorMessage);
-        }
-    }
-    
-    // --- Command: .help (UPDATED to include .ask) ---
-    else if (commandName === "help") {
+    // --- Command: .help (UNCHANGED) ---
+    if (commandName === "help") {
         const helpEmbed = new Discord.EmbedBuilder()
             .setColor(0x3498db)
             .setTitle("Kira Bot Commands")
@@ -990,7 +933,7 @@ client.on("messageCreate", async (message) => {
                 },
                 {
                     name: "General Utility",
-                    value: "`.ask [question]` - Ask the Gemini AI a question.\n`.status` - Check the bot's ping and uptime.\n`.userinfo [user]` - Get information about a user.",
+                    value: "`.status` - Check the bot's ping and uptime.\n`.userinfo [user]` - Get information about a user.",
                     inline: false,
                 },
                 {
@@ -1021,7 +964,7 @@ client.on("messageCreate", async (message) => {
 
         if (user1.id === user2.id) {
             return message.channel.send(
-                "You cannot ship yourself with yourself! Mention someone else!",
+                "You cannot ship yourself with yourself! Mention someone else.",
             );
         }
 
@@ -1034,12 +977,6 @@ client.on("messageCreate", async (message) => {
 
         const name1 = user1.username.replace(/[^a-z0-9]/gi, "");
         const name2 = user2.username.replace(/[^a-z0-9]/gi, "");
-        // Assuming generateShipName is defined somewhere else or defined locally
-        function generateShipName(nameA, nameB) {
-            const lenA = Math.ceil(nameA.length / 2);
-            const lenB = Math.floor(nameB.length / 2);
-            return nameA.substring(0, lenA) + nameB.substring(lenB);
-        }
         const shipName = generateShipName(name1, name2);
 
         let shipColor = 0xff0000;
