@@ -1,28 +1,24 @@
 const Discord = require("discord.js");
 const { Client } = require("pg");
 const express = require("express");
+const axios = require("axios"); // Switched selfPing to use axios for robust HTTPS
 const { PermissionFlagsBits, Events } = require("discord.js");
-const axios = require("axios");
 
-// --- Global Crash Handlers ---
+// --- Global Crash Handlers (Kept) ---
 process.on("unhandledRejection", (error) => {
-    // This logs errors from Promises that aren't caught (e.g., failed message sends)
     console.error("CRITICAL UNHANDLED PROMISE REJECTION:", error);
 });
 
 process.on("uncaughtException", (error) => {
-    // This logs synchronous errors that aren't wrapped in a try/catch block
     console.error("CRITICAL UNCAUGHT EXCEPTION:", error);
-    // Best practice is to exit the process after an uncaught exception
     try {
         client.destroy();
     } catch (e) {
-        // This is necessary because 'client' might not be initialized yet during a startup error
         console.error("Failed to destroy client:", e);
     }
     process.exit(1);
 });
-// -----------------------------
+// ---------------------------------------------
 
 // Command Prefix
 const PREFIX = ".";
@@ -50,15 +46,10 @@ function generateShipName(name1, name2) {
     const len2 = name2.length;
     const half1 = Math.ceil(len1 / 2);
     const half2 = Math.ceil(len2 / 2);
-
-    // Take first half of name1 and second half of name2
     const part1 = name1.substring(0, half1);
     const part2 = name2.substring(len2 - half2);
-
     return part1 + part2;
 }
-// -------------------------------------------------------
-
 
 // Magic 8-Ball Responses 
 const eightBallResponses = [
@@ -116,41 +107,31 @@ const token = process.env.TOKEN;
 // UPTIME AND DATABASE FUNCTIONS
 // -------------------------------------------------------------
 
-// --- Server Setup (Replaces external keepAlive) ---
+// --- Server Setup (Kept) ---
 const app = express();
 
 function keepAlive() {
     app.get("/", (req, res) => {
-        // This is the endpoint the self-pinger will hit (and potentially external monitors)
         res.send("Bot is Alive!");
     });
-    // Listen on the port provided by the environment, or default to 3000
     app.listen(process.env.PORT || 3000, () => {
         console.log(`Web server running on port ${process.env.PORT || 3000}`);
     });
 }
 
-// --- Self-Pinging Function (CORRECTED & STREAMLINED) ---
+// --- Self-Pinging Function (Using axios as originally intended) ---
 function selfPing() {
-    // Determine the URL to ping. Use the environment variable if available (e.g., Render, Railway), 
-    // otherwise default to localhost or an assumed external URL.
     const url = process.env.RENDER_EXTERNAL_URL || `http://localhost:${process.env.PORT || 3000}`; 
 
     setInterval(async () => {
         try {
-            // Use axios for robust HTTPS support
             const res = await axios.get(url); 
-            
-            // Log success or status
             console.log(`Self-Ping successful. Status: ${res.status}`);
         } catch (error) {
-            // Log any errors (e.g., if the server is temporarily down)
             console.error(`Self-Ping Error: ${error.message}`);
         }
-    }, 180000); // Ping every 3 minutes (180,000 milliseconds)
+    }, 180000); // Ping every 3 minutes
 }
-// -----------------------------------------------------------------------
-
 
 async function setupDatabase() {
     try {
@@ -232,7 +213,7 @@ async function saveState(channelId, nextNum) {
 }
 
 async function initializeBot() {
-    // --- FIX: PREVENT DOUBLE INITIALIZATION ---
+    // --- CRITICAL FIX: PROCESS-LEVEL GUARD ---
     if (botInitialized) {
         console.log("Bot initialization skipped: another process is likely running.");
         return;
@@ -589,6 +570,7 @@ client.on(Events.ClientReady, async () => {
     console.log(`Logged in as ${client.user.tag}!`);
 
     // --- CRITICAL FIX: REGISTER MESSAGE LISTENER HERE ---
+    // This ensures the message listener is attached ONLY ONCE per client login.
     registerMessageListener();
     // ----------------------------------------------------
 
