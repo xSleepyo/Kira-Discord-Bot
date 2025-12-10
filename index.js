@@ -1,10 +1,10 @@
 const Discord = require("discord.js");
 const { Client } = require("pg");
 const express = require("express");
-const axios = require("axios"); // Switched selfPing to use axios for robust HTTPS
+const axios = require("axios");
 const { PermissionFlagsBits, Events } = require("discord.js");
 
-// --- Global Crash Handlers (Kept) ---
+// --- Global Crash Handlers ---
 process.on("unhandledRejection", (error) => {
     console.error("CRITICAL UNHANDLED PROMISE REJECTION:", error);
 });
@@ -18,7 +18,7 @@ process.on("uncaughtException", (error) => {
     }
     process.exit(1);
 });
-// ---------------------------------------------
+// -----------------------------
 
 // Command Prefix
 const PREFIX = ".";
@@ -26,7 +26,7 @@ const PREFIX = ".";
 // Global memory store for embed drafts
 const userEmbedDrafts = {};
 
-// --- FIX: FLAG TO PREVENT DOUBLE INITIALIZATION / DOUBLE COMMANDS ---
+// --- CRITICAL FIX: FLAG TO PREVENT DOUBLE INITIALIZATION / DOUBLE COMMANDS ---
 let botInitialized = false;
 
 // ANSI Color Map
@@ -107,7 +107,7 @@ const token = process.env.TOKEN;
 // UPTIME AND DATABASE FUNCTIONS
 // -------------------------------------------------------------
 
-// --- Server Setup (Kept) ---
+// --- Server Setup ---
 const app = express();
 
 function keepAlive() {
@@ -119,7 +119,7 @@ function keepAlive() {
     });
 }
 
-// --- Self-Pinging Function (Using axios as originally intended) ---
+// --- Self-Pinging Function (using axios) ---
 function selfPing() {
     const url = process.env.RENDER_EXTERNAL_URL || `http://localhost:${process.env.PORT || 3000}`; 
 
@@ -131,7 +131,7 @@ function selfPing() {
             console.error(`Self-Ping Error: ${error.message}`);
         }
     }, 180000); // Ping every 3 minutes
-}
+} // This is the correct end of the function. No redundant code after this.
 
 async function setupDatabase() {
     try {
@@ -163,7 +163,7 @@ async function setupDatabase() {
             "CRITICAL ERROR: Failed to connect or setup database!",
             error,
         );
-        throw error; // Re-throw to halt bot initialization on critical failure
+        throw error; 
     }
 }
 
@@ -193,7 +193,7 @@ async function loadState() {
         );
     } catch (error) {
         console.error("CRITICAL ERROR: Failed to load database state!", error);
-        throw error; // Re-throw to halt bot initialization on critical failure
+        throw error;
     }
 }
 
@@ -237,7 +237,7 @@ async function initializeBot() {
 }
 
 // -------------------------------------------------------------
-// Handle Text Messages - NOW IN A SEPARATE FUNCTION
+// Handle Text Messages - LISTENER REGISTRAR
 // -------------------------------------------------------------
 function registerMessageListener() {
     client.on("messageCreate", async (message) => {
@@ -493,8 +493,9 @@ function registerMessageListener() {
             message.channel.send({ embeds: [eightBallEmbed] });
         }
 
-        // --- Command: .status (ANSI COLOR FIXED) ---
+        // --- Command: .status (UPDATED WITH SERVERS & MEMORY) ---
         else if (commandName === "status") {
+            // Uptime calculation (existing)
             let totalSeconds = client.uptime / 1000;
             let days = Math.floor(totalSeconds / 86400);
             totalSeconds %= 86400;
@@ -504,6 +505,12 @@ function registerMessageListener() {
             let seconds = Math.floor(totalSeconds % 60);
 
             const uptimeString = `${days}d, ${hours}h, ${minutes}m, ${seconds}s`;
+            
+            // NEW: Get memory usage (in MB)
+            const memoryUsage = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(2);
+            
+            // NEW: Get server count
+            const serverCount = client.guilds.cache.size;
 
             const statusEmbed = new Discord.EmbedBuilder()
                 .setColor(0x00ff00)
@@ -513,19 +520,29 @@ function registerMessageListener() {
                 .addFields(
                     {
                         name: "**Connection**",
-                        // Using \x1b for the escape character to properly render ANSI code
+                        // Using ANSI code format that Discord renders
                         value: "```ansi\n\x1b[0;32mOnline\x1b[0m\n```",
                         inline: true,
                     },
                     {
                         name: "**Ping**",
-                        // Using \x1b for the escape character to properly render ANSI code
                         value: `\`\`\`ansi\n\x1b[0;32m${client.ws.ping}ms\x1b[0m\n\`\`\``,
                         inline: true,
                     },
+                    // --- NEW METRICS ---
+                    {
+                        name: "**Servers**",
+                        value: `\`\`\`ansi\n\x1b[0;32m${serverCount}\x1b[0m\n\`\`\``,
+                        inline: true,
+                    },
+                    {
+                        name: "**Memory**",
+                        value: `\`\`\`ansi\n\x1b[0;32m${memoryUsage} MB\x1b[0m\n\`\`\``,
+                        inline: true,
+                    },
+                    // --- EXISTING ---
                     {
                         name: "**Uptime**",
-                        // Using \x1b for the escape character to properly render ANSI code
                         value: `\`\`\`ansi\n\x1b[0;32m${uptimeString}\x1b[0m\n\`\`\``,
                         inline: false,
                     },
@@ -570,7 +587,6 @@ client.on(Events.ClientReady, async () => {
     console.log(`Logged in as ${client.user.tag}!`);
 
     // --- CRITICAL FIX: REGISTER MESSAGE LISTENER HERE ---
-    // This ensures the message listener is attached ONLY ONCE per client login.
     registerMessageListener();
     // ----------------------------------------------------
 
