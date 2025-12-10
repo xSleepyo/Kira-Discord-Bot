@@ -42,8 +42,6 @@ const COLOR_MAP = {
     DEFAULT: 0x3498db,
 };
 
-// The Generative AI Initialization block was removed here.
-
 // --- ANSI COLOR HELPER FUNCTION ---
 function colorizeAnsi(code, text) {
     return `\x1b[${code}m${text}\x1b[0m`;
@@ -932,7 +930,7 @@ client.on("messageCreate", async (message) => {
     const args = rawArgs.split(/ +/);
     const commandName = args.shift().toLowerCase();
 
-    // --- Command: .help (NOW STARTS THE COMMAND CHAIN) ---
+    // --- Command: .help ---
     if (commandName === "help") {
         const helpEmbed = new Discord.EmbedBuilder()
             .setColor(0x3498db)
@@ -1135,7 +1133,7 @@ client.on("messageCreate", async (message) => {
         message.channel.send({ embeds: [eightBallEmbed] });
     }
 
-    // --- Command: .status ---
+    // --- Command: .status (CORRECTED) ---
     else if (commandName === "status") {
         let totalSeconds = client.uptime / 1000;
         let days = Math.floor(totalSeconds / 86400);
@@ -1155,17 +1153,20 @@ client.on("messageCreate", async (message) => {
             .addFields(
                 {
                     name: "**Connection**",
-                    value: "```ansi\n [0;32mOnline\n```",
+                    // The 'ansi' block and color code have been removed for compatibility.
+                    value: "```Online```",
                     inline: true,
                 },
                 {
                     name: "**Ping**",
-                    value: `\`\`\`ansi\n [0;32m${client.ws.ping}ms\n\`\`\``,
+                    // The 'ansi' block and color code have been removed for compatibility.
+                    value: `\`\`\`${client.ws.ping}ms\`\`\``,
                     inline: true,
                 },
                 {
                     name: "**Uptime**",
-                    value: `\`\`\`ansi\n [0;32m${uptimeString}\n\`\`\``,
+                    // The 'ansi' block and color code have been removed for compatibility.
+                    value: `\`\`\`${uptimeString}\`\`\``,
                     inline: false,
                 },
             );
