@@ -1,7 +1,6 @@
 const Discord = require("discord.js");
 const { Client } = require("pg");
 const express = require("express");
-const http = require("http");
 const { PermissionFlagsBits, Events } = require("discord.js");
 const axios = require("axios");
 
@@ -19,7 +18,7 @@ process.on("uncaughtException", (error) => {
         client.destroy();
     } catch (e) {
         // This is necessary because 'client' might not be initialized yet during a startup error
-        console.error("Failed to destroy client:", e); 
+        console.error("Failed to destroy client:", e);
     }
     process.exit(1);
 });
@@ -43,22 +42,6 @@ const COLOR_MAP = {
     PURPLE: 0x9b59b6,
     CYAN: 0x00ffff,
     DEFAULT: 0x3498db,
-};
-
-// --- ANSI COLOR HELPER FUNCTION ---
-function colorizeAnsi(code, text) {
-    return `\x1b[${code}m${text}\x1b[0m`;
-}
-
-const ANSI_FOREGROUND_CODES = {
-    BLUE: "34",
-    GREEN: "32",
-    RED: "31",
-    YELLOW: "33",
-    MAGENTA: "35",
-    CYAN: "36",
-    WHITE: "37",
-    RESET: "0",
 };
 
 // --- Ship Name Generator (Required for .ship command) ---
@@ -251,10 +234,11 @@ async function saveState(channelId, nextNum) {
 async function initializeBot() {
     // --- FIX: PREVENT DOUBLE INITIALIZATION ---
     if (botInitialized) {
-        console.log("Bot initialization skipped: already running.");
+        console.log("Bot initialization skipped: another process is likely running.");
         return;
     }
     botInitialized = true;
+    console.log("Bot initialization started...");
     // ------------------------------------------
 
     try {
@@ -265,18 +249,348 @@ async function initializeBot() {
         selfPing(); // Starts the internal self-ping loop for continuous activity
         client.login(token);
     } catch (error) {
-        // If setup or load fails, log and exit/prevent login
+        // If setup or load fails, log and prevent login
         console.error("Bot failed to initialize due to critical error:", error);
         botInitialized = false; // Reset flag so a restart attempt is possible
-        // Optional: process.exit(1); if you want to hard exit on DB failure
     }
 }
 
+// -------------------------------------------------------------
+// Handle Text Messages - NOW IN A SEPARATE FUNCTION
+// -------------------------------------------------------------
+function registerMessageListener() {
+    client.on("messageCreate", async (message) => {
+        if (message.author.bot) return;
+
+        const content = message.content;
+        const command = content.toLowerCase();
+
+        // --- Counting Logic Check ---
+        if (countingChannelId && message.channel.id === countingChannelId) {
+            const number = parseInt(content);
+
+            if (isNaN(number)) {
+                return;
+            }
+
+            if (number === nextNumber) {
+                try {
+                    await new Promise((resolve) => setTimeout(resolve, 750));
+                    await message.react("✔️");
+
+                    nextNumber++;
+                    await saveState(countingChannelId, nextNumber);
+                } catch (error) {
+                    console.error(
+                        `Failed to react to message ID ${message.id}:`,
+                        error,
+                    );
+
+                    nextNumber++;
+                    await saveState(countingChannelId, nextNumber);
+                }
+            } else {
+                message.channel
+                    .send(
+                        `Wrong Number! The next number was **${nextNumber}**. Try again.`,
+                    )
+                    .then((msg) => {
+                        setTimeout(() => msg.delete().catch(console.error), 3000);
+                    });
+
+                setTimeout(() => message.delete().catch(console.error), 3000);
+            }
+        }
+
+        // Check for the prefix
+        if (!command.startsWith(PREFIX)) return;
+
+        const rawArgs = message.content.slice(PREFIX.length).trim();
+        const args = rawArgs.split(/ +/);
+        const commandName = args.shift().toLowerCase();
+
+        // --- Command: .help ---
+        if (commandName === "help") {
+            const helpEmbed = new Discord.EmbedBuilder()
+                .setColor(0x3498db)
+                .setTitle("Kira Bot Commands")
+                .setDescription("Here is a list of commands you can use:")
+                .addFields(
+                    {
+                        name: "Admin Commands (Slash)",
+                        value: "`/countinggame` - Setup the counting channel.\n`/resetcounting` - Reset the count to 1.\n`/embed` - Starts an interactive conversation to build an embed.\n`/reactionrole` - Set up a reaction role on a message.",
+                        inline: false,
+                    },
+                    {
+                        name: "Moderation & Utility (Admin Required)",
+                        value: "`.purge [number]` - Delete messages.",
+                        inline: false,
+                    },
+                    {
+                        name: "General Utility",
+                        value: "`.status` - Check the bot's ping and uptime.\n`.userinfo [user]` - Get information about a user.",
+                        inline: false,
+                    },
+                    {
+                        name: "Counting Game",
+                        value: "Just post the next number in the counting channel!",
+                        inline: false,
+                    },
+                    {
+                        name: "Fun Commands",
+                        value: "`.joke` - Get a random joke.\n`.8ball [question]` - Ask the magic 8-ball a question.\n`.flip` - Flip a coin (Heads or Tails).\n`.ship [user]` - Calculate compatibility.",
+                        inline: false,
+                    },
+                )
+                .setFooter({ text: `Prefix: ${PREFIX}` });
+
+            message.channel.send({ embeds: [helpEmbed] });
+        }
+
+        // --- Command: .ship ---
+        else if (commandName === "ship") {
+            const user1 = message.author;
+
+            let user2 = message.mentions.users.first();
+
+            if (!user2) {
+                user2 = client.user;
+            }
+
+            if (user1.id === user2.id) {
+                return message.channel.send(
+                    "You cannot ship yourself with yourself! Mention someone else.",
+                );
+            }
+
+            const seed = user1.id.slice(0, 5) + user2.id.slice(0, 5);
+            let hash = 0;
+            for (let i = 0; i < seed.length; i++) {
+                hash = seed.charCodeAt(i) + ((hash << 5) - hash);
+            }
+            const compatibility = Math.abs(hash % 101); // 0 to 100%
+
+            const name1 = user1.username.replace(/[^a-z0-9]/gi, "");
+            const name2 = user2.username.replace(/[^a-z0-9]/gi, "");
+            const shipName = generateShipName(name1, name2);
+
+            let shipColor = 0xff0000;
+            let description = `Compatibility between **${user1.username}** and **${user2.username}**.`;
+
+            if (compatibility >= 90) {
+                shipColor = 0x00ff00;
+                description = `A perfect match! Soulmates detected!`;
+            } else if (compatibility >= 60) {
+                shipColor = 0xffa500;
+                description = `A strong connection! This ship has smooth sailing ahead.`;
+            } else if (compatibility >= 30) {
+                shipColor = 0xffff00;
+                description = `There's potential, but watch out for a few icebergs.`;
+            }
+
+            const shipEmbed = new Discord.EmbedBuilder()
+                .setColor(shipColor)
+                .setTitle(`Compatibility Calculator`)
+                .setDescription(description)
+                .addFields(
+                    { name: "Pair", value: `${user1} + ${user2}`, inline: false },
+                    {
+                        name: "Ship Name",
+                        value: `**${shipName.charAt(0).toUpperCase() + shipName.slice(1)}**`,
+                        inline: false,
+                    },
+                    {
+                        name: "Compatibility",
+                        value: `**${compatibility}%**`,
+                        inline: false,
+                    },
+                )
+                .setFooter({ text: `Requested by ${message.author.tag}` });
+
+            message.channel.send({ embeds: [shipEmbed] });
+        }
+
+        // --- Command: .purge ---
+        else if (commandName === "purge") {
+            if (
+                !message.member.permissions.has(
+                    Discord.PermissionFlagsBits.ManageMessages,
+                )
+            ) {
+                return message.channel.send(
+                    "❌ You do not have permission to manage messages.",
+                );
+            }
+            const amount = parseInt(args[0]);
+
+            if (isNaN(amount) || amount <= 0 || amount > 100) {
+                return message.channel.send(
+                    "Please provide a number between 1 and 100 for messages to delete.",
+                );
+            } 
+
+            try {
+                const deleted = await message.channel.bulkDelete(amount, true);
+
+                const confirmMsg = await message.channel.send(
+                    `✅ Successfully deleted ${deleted.size} messages.`,
+                );
+
+                setTimeout(() => confirmMsg.delete().catch(console.error), 5000);
+            } catch (error) {
+                console.error("Error during purge:", error);
+                message.channel.send(
+                    '❌ I was unable to delete messages. Make sure my role has "Manage Messages" permission.',
+                );
+            }
+        }
+
+        // --- Command: .flip ---
+        else if (commandName === "flip") {
+            const outcome = Math.random() < 0.5 ? "Heads" : "Tails";
+            message.channel.send(`🪙 The coin landed on **${outcome}**!`);
+        }
+
+        // --- Command: .userinfo ---
+        else if (commandName === "userinfo") {
+            const member = message.mentions.members.first() || message.member;
+            const user = member.user;
+
+            const roles =
+                member.roles.cache
+                    .filter((role) => role.id !== message.guild.id)
+                    .map((role) => role.toString())
+                    .join(", ") || "None";
+
+            const userInfoEmbed = new Discord.EmbedBuilder()
+                .setColor(member.displayHexColor || 0x3498db)
+                .setTitle(`User Information: ${user.tag}`)
+                .setThumbnail(user.displayAvatarURL({ dynamic: true }))
+                .addFields(
+                    { name: "User ID", value: user.id, inline: false },
+                    {
+                        name: "Account Creation Date",
+                        value: `<t:${Math.floor(user.createdAt.getTime() / 1000)}:R>`,
+                        inline: false,
+                    },
+                    {
+                        name: "Joined Server Date",
+                        value: `<t:${Math.floor(member.joinedAt.getTime() / 1000)}:R>`,
+                        inline: false,
+                    },
+                    { name: "Roles", value: roles, inline: false },
+                )
+                .setFooter({ text: `Requested by ${message.author.tag}` });
+
+            message.channel.send({ embeds: [userInfoEmbed] });
+        }
+
+        // --- Command: .8ball ---
+        else if (commandName === "8ball") {
+            const question = args.join(" ");
+
+            if (!question) {
+                return message.channel.send(
+                    "Please ask the magic 8-ball a question!",
+                );
+            }
+
+            const randomIndex = Math.floor(
+                Math.random() * eightBallResponses.length,
+            );
+            const response = eightBallResponses[randomIndex];
+
+            const eightBallEmbed = new Discord.EmbedBuilder()
+                .setColor(0x9b59b6)
+                .setTitle("Magic 8-Ball")
+                .addFields(
+                    { name: "Question", value: question, inline: false },
+                    { name: "Answer", value: response, inline: false },
+                )
+                .setFooter({ text: `Asked by ${message.author.tag}` });
+
+            message.channel.send({ embeds: [eightBallEmbed] });
+        }
+
+        // --- Command: .status (ANSI COLOR FIXED) ---
+        else if (commandName === "status") {
+            let totalSeconds = client.uptime / 1000;
+            let days = Math.floor(totalSeconds / 86400);
+            totalSeconds %= 86400;
+            let hours = Math.floor(totalSeconds / 3600);
+            totalSeconds %= 3600;
+            let minutes = Math.floor(totalSeconds / 60);
+            let seconds = Math.floor(totalSeconds % 60);
+
+            const uptimeString = `${days}d, ${hours}h, ${minutes}m, ${seconds}s`;
+
+            const statusEmbed = new Discord.EmbedBuilder()
+                .setColor(0x00ff00)
+                .setTitle("Bot Status Report")
+                .setFooter({ text: "Updated Live" })
+                .setTimestamp()
+                .addFields(
+                    {
+                        name: "**Connection**",
+                        // Using \x1b for the escape character to properly render ANSI code
+                        value: "```ansi\n\x1b[0;32mOnline\x1b[0m\n```",
+                        inline: true,
+                    },
+                    {
+                        name: "**Ping**",
+                        // Using \x1b for the escape character to properly render ANSI code
+                        value: `\`\`\`ansi\n\x1b[0;32m${client.ws.ping}ms\x1b[0m\n\`\`\``,
+                        inline: true,
+                    },
+                    {
+                        name: "**Uptime**",
+                        // Using \x1b for the escape character to properly render ANSI code
+                        value: `\`\`\`ansi\n\x1b[0;32m${uptimeString}\x1b[0m\n\`\`\``,
+                        inline: false,
+                    },
+                );
+
+            message.channel.send({ embeds: [statusEmbed] });
+        }
+
+        // --- Command: .joke ---
+        else if (commandName === "joke") {
+            try {
+                const response = await axios.get(
+                    "https://v2.jokeapi.dev/joke/Any?blacklistFlags=racist,sexist,explicit&type=single",
+                );
+                const joke = response.data.joke;
+
+                if (joke) {
+                    message.channel.send(`**Here's a joke!**\n\n${joke}`);
+                } else {
+                    message.channel.send(
+                        "Sorry, I couldn't fetch a joke right now.",
+                    );
+                }
+            } catch (error) {
+                console.error("Error fetching joke:", error);
+                message.channel.send(
+                    "My joke generator seems to be taking a nap. Try again later!",
+                );
+            }
+        }
+
+        // --- Simple Aliases: Hello! or Hey! ---
+        else if (command === "hello!" || command === "hey!") {
+            message.channel.send("Hey!, how are you?");
+        }
+    });
+}
 // -------------------------------------------------------------
 // Register Slash Commands
 // -------------------------------------------------------------
 client.on(Events.ClientReady, async () => {
     console.log(`Logged in as ${client.user.tag}!`);
+
+    // --- CRITICAL FIX: REGISTER MESSAGE LISTENER HERE ---
+    registerMessageListener();
+    // ----------------------------------------------------
 
     // --- SET BOT STATUS ---
     client.user.setPresence({
@@ -897,331 +1211,6 @@ client.on("messageReactionRemove", (reaction, user) =>
     handleReactionRole(reaction, user, false),
 );
 
-// -------------------------------------------------------------
-// Handle Text Messages
-// -------------------------------------------------------------
-client.on("messageCreate", async (message) => {
-    if (message.author.bot) return;
-
-    const content = message.content;
-    const command = content.toLowerCase();
-
-    // --- Counting Logic Check ---
-    if (countingChannelId && message.channel.id === countingChannelId) {
-        const number = parseInt(content);
-
-        if (isNaN(number)) {
-            return;
-        }
-
-        if (number === nextNumber) {
-            try {
-                await new Promise((resolve) => setTimeout(resolve, 750));
-                await message.react("✔️");
-
-                nextNumber++;
-                await saveState(countingChannelId, nextNumber);
-            } catch (error) {
-                console.error(
-                    `Failed to react to message ID ${message.id}:`,
-                    error,
-                );
-
-                nextNumber++;
-                await saveState(countingChannelId, nextNumber);
-            }
-        } else {
-            message.channel
-                .send(
-                    `Wrong Number! The next number was **${nextNumber}**. Try again.`,
-                )
-                .then((msg) => {
-                    setTimeout(() => msg.delete().catch(console.error), 3000);
-                });
-
-            setTimeout(() => message.delete().catch(console.error), 3000);
-        }
-    }
-
-    // Check for the prefix
-    if (!command.startsWith(PREFIX)) return;
-
-    const rawArgs = message.content.slice(PREFIX.length).trim();
-    const args = rawArgs.split(/ +/);
-    const commandName = args.shift().toLowerCase();
-
-    // --- Command: .help ---
-    if (commandName === "help") {
-        const helpEmbed = new Discord.EmbedBuilder()
-            .setColor(0x3498db)
-            .setTitle("Kira Bot Commands")
-            .setDescription("Here is a list of commands you can use:")
-            .addFields(
-                {
-                    name: "Admin Commands (Slash)",
-                    value: "`/countinggame` - Setup the counting channel.\n`/resetcounting` - Reset the count to 1.\n`/embed` - Starts an interactive conversation to build an embed.\n`/reactionrole` - Set up a reaction role on a message.",
-                    inline: false,
-                },
-                {
-                    name: "Moderation & Utility (Admin Required)",
-                    value: "`.purge [number]` - Delete messages.",
-                    inline: false,
-                },
-                {
-                    name: "General Utility",
-                    value: "`.status` - Check the bot's ping and uptime.\n`.userinfo [user]` - Get information about a user.",
-                    inline: false,
-                },
-                {
-                    name: "Counting Game",
-                    value: "Just post the next number in the counting channel!",
-                    inline: false,
-                },
-                {
-                    name: "Fun Commands",
-                    value: "`.joke` - Get a random joke.\n`.8ball [question]` - Ask the magic 8-ball a question.\n`.flip` - Flip a coin (Heads or Tails).\n`.ship [user]` - Calculate compatibility.",
-                    inline: false,
-                },
-            )
-            .setFooter({ text: `Prefix: ${PREFIX}` });
-
-        message.channel.send({ embeds: [helpEmbed] });
-    }
-
-    // --- Command: .ship ---
-    else if (commandName === "ship") {
-        const user1 = message.author;
-
-        let user2 = message.mentions.users.first();
-
-        if (!user2) {
-            user2 = client.user;
-        }
-
-        if (user1.id === user2.id) {
-            return message.channel.send(
-                "You cannot ship yourself with yourself! Mention someone else.",
-            );
-        }
-
-        const seed = user1.id.slice(0, 5) + user2.id.slice(0, 5);
-        let hash = 0;
-        for (let i = 0; i < seed.length; i++) {
-            hash = seed.charCodeAt(i) + ((hash << 5) - hash);
-        }
-        const compatibility = Math.abs(hash % 101); // 0 to 100%
-
-        const name1 = user1.username.replace(/[^a-z0-9]/gi, "");
-        const name2 = user2.username.replace(/[^a-z0-9]/gi, "");
-        const shipName = generateShipName(name1, name2);
-
-        let shipColor = 0xff0000;
-        let description = `Compatibility between **${user1.username}** and **${user2.username}**.`;
-
-        if (compatibility >= 90) {
-            shipColor = 0x00ff00;
-            description = `A perfect match! Soulmates detected!`;
-        } else if (compatibility >= 60) {
-            shipColor = 0xffa500;
-            description = `A strong connection! This ship has smooth sailing ahead.`;
-        } else if (compatibility >= 30) {
-            shipColor = 0xffff00;
-            description = `There's potential, but watch out for a few icebergs.`;
-        }
-
-        const shipEmbed = new Discord.EmbedBuilder()
-            .setColor(shipColor)
-            .setTitle(`Compatibility Calculator`)
-            .setDescription(description)
-            .addFields(
-                { name: "Pair", value: `${user1} + ${user2}`, inline: false },
-                {
-                    name: "Ship Name",
-                    value: `**${shipName.charAt(0).toUpperCase() + shipName.slice(1)}**`,
-                    inline: false,
-                },
-                {
-                    name: "Compatibility",
-                    value: `**${compatibility}%**`,
-                    inline: false,
-                },
-            )
-            .setFooter({ text: `Requested by ${message.author.tag}` });
-
-        message.channel.send({ embeds: [shipEmbed] });
-    }
-
-    // --- Command: .purge ---
-    else if (commandName === "purge") {
-        if (
-            !message.member.permissions.has(
-                Discord.PermissionFlagsBits.ManageMessages,
-            )
-        ) {
-            return message.channel.send(
-                "❌ You do not have permission to manage messages.",
-            );
-        }
-        const amount = parseInt(args[0]);
-
-        if (isNaN(amount) || amount <= 0 || amount > 100) {
-            return message.channel.send(
-                "Please provide a number between 1 and 100 for messages to delete.",
-            );
-        } 
-
-        try {
-            const deleted = await message.channel.bulkDelete(amount, true);
-
-            const confirmMsg = await message.channel.send(
-                `✅ Successfully deleted ${deleted.size} messages.`,
-            );
-
-            setTimeout(() => confirmMsg.delete().catch(console.error), 5000);
-        } catch (error) {
-            console.error("Error during purge:", error);
-            message.channel.send(
-                '❌ I was unable to delete messages. Make sure my role has "Manage Messages" permission.',
-            );
-        }
-    }
-
-    // --- Command: .flip ---
-    else if (commandName === "flip") {
-        const outcome = Math.random() < 0.5 ? "Heads" : "Tails";
-        message.channel.send(`🪙 The coin landed on **${outcome}**!`);
-    }
-
-    // --- Command: .userinfo ---
-    else if (commandName === "userinfo") {
-        const member = message.mentions.members.first() || message.member;
-        const user = member.user;
-
-        const roles =
-            member.roles.cache
-                .filter((role) => role.id !== message.guild.id)
-                .map((role) => role.toString())
-                .join(", ") || "None";
-
-        const userInfoEmbed = new Discord.EmbedBuilder()
-            .setColor(member.displayHexColor || 0x3498db)
-            .setTitle(`User Information: ${user.tag}`)
-            .setThumbnail(user.displayAvatarURL({ dynamic: true }))
-            .addFields(
-                { name: "User ID", value: user.id, inline: false },
-                {
-                    name: "Account Creation Date",
-                    value: `<t:${Math.floor(user.createdAt.getTime() / 1000)}:R>`,
-                    inline: false,
-                },
-                {
-                    name: "Joined Server Date",
-                    value: `<t:${Math.floor(member.joinedAt.getTime() / 1000)}:R>`,
-                    inline: false,
-                },
-                { name: "Roles", value: roles, inline: false },
-            )
-            .setFooter({ text: `Requested by ${message.author.tag}` });
-
-        message.channel.send({ embeds: [userInfoEmbed] });
-    }
-
-    // --- Command: .8ball ---
-    else if (commandName === "8ball") {
-        const question = args.join(" ");
-
-        if (!question) {
-            return message.channel.send(
-                "Please ask the magic 8-ball a question!",
-            );
-        }
-
-        const randomIndex = Math.floor(
-            Math.random() * eightBallResponses.length,
-        );
-        const response = eightBallResponses[randomIndex];
-
-        const eightBallEmbed = new Discord.EmbedBuilder()
-            .setColor(0x9b59b6)
-            .setTitle("Magic 8-Ball")
-            .addFields(
-                { name: "Question", value: question, inline: false },
-                { name: "Answer", value: response, inline: false },
-            )
-            .setFooter({ text: `Asked by ${message.author.tag}` });
-
-        message.channel.send({ embeds: [eightBallEmbed] });
-    }
-
-    // --- Command: .status (ANSI COLOR FIXED) ---
-    else if (commandName === "status") {
-        let totalSeconds = client.uptime / 1000;
-        let days = Math.floor(totalSeconds / 86400);
-        totalSeconds %= 86400;
-        let hours = Math.floor(totalSeconds / 3600);
-        totalSeconds %= 3600;
-        let minutes = Math.floor(totalSeconds / 60);
-        let seconds = Math.floor(totalSeconds % 60);
-
-        const uptimeString = `${days}d, ${hours}h, ${minutes}m, ${seconds}s`;
-
-        const statusEmbed = new Discord.EmbedBuilder()
-            .setColor(0x00ff00)
-            .setTitle("Bot Status Report")
-            .setFooter({ text: "Updated Live" })
-            .setTimestamp()
-            .addFields(
-                {
-                    name: "**Connection**",
-                    // FIX: Using \x1b for the escape character to properly render ANSI code
-                    value: "```ansi\n\x1b[0;32mOnline\x1b[0m\n```",
-                    inline: true,
-                },
-                {
-                    name: "**Ping**",
-                    // FIX: Using \x1b for the escape character to properly render ANSI code
-                    value: `\`\`\`ansi\n\x1b[0;32m${client.ws.ping}ms\x1b[0m\n\`\`\``,
-                    inline: true,
-                },
-                {
-                    name: "**Uptime**",
-                    // FIX: Using \x1b for the escape character to properly render ANSI code
-                    value: `\`\`\`ansi\n\x1b[0;32m${uptimeString}\x1b[0m\n\`\`\``,
-                    inline: false,
-                },
-            );
-
-        message.channel.send({ embeds: [statusEmbed] });
-    }
-
-    // --- Command: .joke ---
-    else if (commandName === "joke") {
-        try {
-            const response = await axios.get(
-                "https://v2.jokeapi.dev/joke/Any?blacklistFlags=racist,sexist,explicit&type=single",
-            );
-            const joke = response.data.joke;
-
-            if (joke) {
-                message.channel.send(`**Here's a joke!**\n\n${joke}`);
-            } else {
-                message.channel.send(
-                    "Sorry, I couldn't fetch a joke right now.",
-                );
-            }
-        } catch (error) {
-            console.error("Error fetching joke:", error);
-            message.channel.send(
-                "My joke generator seems to be taking a nap. Try again later!",
-            );
-        }
-    }
-
-    // --- Simple Aliases: Hello! or Hey! ---
-    else if (command === "hello!" || command === "hey!") {
-        message.channel.send("Hey!, how are you?");
-    }
-});
 
 // Final call to start the whole process
 initializeBot();
