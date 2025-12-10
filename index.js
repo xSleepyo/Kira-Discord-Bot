@@ -4,7 +4,6 @@ const express = require("express");
 const http = require("http");
 const { PermissionFlagsBits, Events } = require("discord.js");
 const axios = require("axios");
-// The Google Generative AI import was removed here
 
 // --- Global Crash Handlers ---
 process.on("unhandledRejection", (error) => {
@@ -19,7 +18,8 @@ process.on("uncaughtException", (error) => {
     try {
         client.destroy();
     } catch (e) {
-        console.error("Failed to destroy client:", e);
+        // This is necessary because 'client' might not be initialized yet during a startup error
+        console.error("Failed to destroy client:", e); 
     }
     process.exit(1);
 });
@@ -147,7 +147,7 @@ function keepAlive() {
     });
 }
 
-// --- Self-Pinging Function (CRITICALLY FIXED) ---
+// --- Self-Pinging Function (CORRECTED & STREAMLINED) ---
 function selfPing() {
     // Determine the URL to ping. Use the environment variable if available (e.g., Render, Railway), 
     // otherwise default to localhost or an assumed external URL.
@@ -199,6 +199,7 @@ async function setupDatabase() {
             "CRITICAL ERROR: Failed to connect or setup database!",
             error,
         );
+        throw error; // Re-throw to halt bot initialization on critical failure
     }
 }
 
@@ -228,6 +229,7 @@ async function loadState() {
         );
     } catch (error) {
         console.error("CRITICAL ERROR: Failed to load database state!", error);
+        throw error; // Re-throw to halt bot initialization on critical failure
     }
 }
 
@@ -255,12 +257,19 @@ async function initializeBot() {
     botInitialized = true;
     // ------------------------------------------
 
-    await setupDatabase();
-    await loadState();
+    try {
+        await setupDatabase();
+        await loadState();
 
-    keepAlive(); // Starts the web server
-    selfPing(); // Starts the internal self-ping loop for continuous activity
-    client.login(token);
+        keepAlive(); // Starts the web server
+        selfPing(); // Starts the internal self-ping loop for continuous activity
+        client.login(token);
+    } catch (error) {
+        // If setup or load fails, log and exit/prevent login
+        console.error("Bot failed to initialize due to critical error:", error);
+        botInitialized = false; // Reset flag so a restart attempt is possible
+        // Optional: process.exit(1); if you want to hard exit on DB failure
+    }
 }
 
 // -------------------------------------------------------------
@@ -1059,7 +1068,7 @@ client.on("messageCreate", async (message) => {
             return message.channel.send(
                 "Please provide a number between 1 and 100 for messages to delete.",
             );
-        } // <-- FIX APPLIED HERE
+        } 
 
         try {
             const deleted = await message.channel.bulkDelete(amount, true);
