@@ -1,6 +1,7 @@
 const Discord = require("discord.js");
 const { Client } = require("pg");
 const express = require("express");
+// REMOVED: const http = require("http"); // Not needed for axios
 const { PermissionFlagsBits, Events } = require("discord.js");
 const axios = require("axios");
 const { GoogleGenerativeAI } = require("@google/genai"); // NEW: Import Gemini AI library
@@ -131,7 +132,7 @@ function keepAlive() {
     });
 }
 
-// --- Self-Pinging Function (CLEANED UP REDUNDANT LOOP) ---
+// --- Self-Pinging Function (CLEANED UP REDUNDANT LOOP AND USING AXIOS) ---
 function selfPing() {
     // Determine the URL to ping. Use the environment variable if available (e.g., Render, Railway), 
     // otherwise default to localhost or an assumed external URL.
@@ -139,7 +140,7 @@ function selfPing() {
 
     setInterval(async () => {
         try {
-            // Use axios for robust HTTPS support
+            // Use axios for robust HTTP/HTTPS support
             const res = await axios.get(url); 
             
             // Log success or status
@@ -150,6 +151,7 @@ function selfPing() {
         }
     }, 180000); // Ping every 3 minutes (180,000 milliseconds)
 }
+
 
 async function setupDatabase() {
     try {
@@ -929,7 +931,7 @@ client.on("messageCreate", async (message) => {
             // The 'chat' approach is best for potentially multi-turn conversations
             const chat = ai.chats.create({ model: aiModel });
 
-            // FIX: Ensure the contents array is correctly structured with role: "user"
+            // Ensure the contents array is correctly structured with role: "user"
             const result = await chat.sendMessage({
                 contents: [{ role: "user", parts: [{ text: userPrompt }] }]
             });
@@ -965,7 +967,7 @@ client.on("messageCreate", async (message) => {
             if (error.message.includes("API_KEY_INVALID")) {
                 errorMessage = "❌ AI API Error: The `GEMINI_API_KEY` is invalid or missing. Please check your environment variables.";
             } else if (error.message.includes("role")) {
-                // Should be fixed, but a helpful message if it somehow persists
+                // This error was fixed by correcting the content structure, but keeping the check just in case.
                  errorMessage = "❌ AI API Error: Request format is incorrect (Invalid role/content).";
             }
 
@@ -992,6 +994,7 @@ client.on("messageCreate", async (message) => {
                 },
                 {
                     name: "General Utility",
+                    // ADDED .ask here as it's now implemented
                     value: "`.ask [question]` - Ask the Gemini AI a question.\n`.status` - Check the bot's ping and uptime.\n`.userinfo [user]` - Get information about a user.",
                     inline: false,
                 },
