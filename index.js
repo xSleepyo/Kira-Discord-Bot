@@ -131,7 +131,7 @@ function selfPing() {
             console.error(`Self-Ping Error: ${error.message}`);
         }
     }, 180000); // Ping every 3 minutes
-} // This is the correct end of the function. No redundant code after this.
+} 
 
 async function setupDatabase() {
     try {
@@ -237,7 +237,7 @@ async function initializeBot() {
 }
 
 // -------------------------------------------------------------
-// Handle Text Messages - LISTENER REGISTRAR
+// Handle Text Messages - LISTENER FUNCTION
 // -------------------------------------------------------------
 function registerMessageListener() {
     client.on("messageCreate", async (message) => {
@@ -586,9 +586,10 @@ function registerMessageListener() {
 client.on(Events.ClientReady, async () => {
     console.log(`Logged in as ${client.user.tag}!`);
 
-    // --- CRITICAL FIX: REGISTER MESSAGE LISTENER HERE ---
+    // --- CRITICAL FIX: REGISTER MESSAGE LISTENER HERE, ONLY ONCE ---
+    // This function wraps all the .commands, ensuring they are only active when the bot is fully ready.
     registerMessageListener();
-    // ----------------------------------------------------
+    // ----------------------------------------------------------------
 
     // --- SET BOT STATUS ---
     client.user.setPresence({
