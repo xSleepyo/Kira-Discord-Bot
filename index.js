@@ -1133,7 +1133,7 @@ client.on("messageCreate", async (message) => {
         message.channel.send({ embeds: [eightBallEmbed] });
     }
 
-    // --- Command: .status (ANSI COLOR RESTORED) ---
+    // --- Command: .status (ANSI COLOR FIXED) ---
     else if (commandName === "status") {
         let totalSeconds = client.uptime / 1000;
         let days = Math.floor(totalSeconds / 86400);
@@ -1153,20 +1153,20 @@ client.on("messageCreate", async (message) => {
             .addFields(
                 {
                     name: "**Connection**",
-                    // Restored original string format for static text
-                    value: "```ansi\n [0;32mOnline\n```",
+                    // FIX: Using \x1b for the escape character to properly render ANSI code
+                    value: "```ansi\n\x1b[0;32mOnline\x1b[0m\n```",
                     inline: true,
                 },
                 {
                     name: "**Ping**",
-                    // Restored original template literal format for variable
-                    value: `\`\`\`ansi\n [0;32m${client.ws.ping}ms\n\`\`\``,
+                    // FIX: Using \x1b for the escape character to properly render ANSI code
+                    value: `\`\`\`ansi\n\x1b[0;32m${client.ws.ping}ms\x1b[0m\n\`\`\``,
                     inline: true,
                 },
                 {
                     name: "**Uptime**",
-                    // Restored original template literal format for variable
-                    value: `\`\`\`ansi\n [0;32m${uptimeString}\n\`\`\``,
+                    // FIX: Using \x1b for the escape character to properly render ANSI code
+                    value: `\`\`\`ansi\n\x1b[0;32m${uptimeString}\x1b[0m\n\`\`\``,
                     inline: false,
                 },
             );
