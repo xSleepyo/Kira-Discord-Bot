@@ -4,8 +4,7 @@ const express = require("express");
 const http = require("http");
 const { PermissionFlagsBits, Events } = require("discord.js");
 const axios = require("axios");
-// FIX: Import the entire module object for a robust CommonJS workaround to prevent "is not a constructor" error.
-const geminiModule = require("@google/genai"); 
+// The Google Generative AI import was removed here
 
 // --- Global Crash Handlers ---
 process.on("unhandledRejection", (error) => {
@@ -43,25 +42,7 @@ const COLOR_MAP = {
     DEFAULT: 0x3498db,
 };
 
-// --- Generative AI Initialization (FIXED FOR CONSTRUCTOR ERROR) ---
-let ai = null;
-// Determine the correct constructor: use the named export if available, otherwise assume the entire module is the constructor.
-const GoogleGenerativeAI = geminiModule.GoogleGenerativeAI || geminiModule;
-
-if (process.env.GEMINI_API_KEY) {
-    try {
-        const aiInstance = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-        // Use a suitable model for chat, like gemini-2.5-flash
-        ai = aiInstance.getGenerativeModel({ model: "gemini-2.5-flash" });
-        console.log("✅ Google Generative AI initialized.");
-    } catch (e) {
-        console.error("Failed to initialize Google Generative AI:", e);
-    }
-} else {
-    console.warn("GEMINI_API_KEY not found. .ask command will be disabled.");
-}
-// ------------------------------------
-
+// The Generative AI Initialization block was removed here.
 
 // --- ANSI COLOR HELPER FUNCTION ---
 function colorizeAnsi(code, text) {
@@ -951,67 +932,8 @@ client.on("messageCreate", async (message) => {
     const args = rawArgs.split(/ +/);
     const commandName = args.shift().toLowerCase();
 
-    // --- Command: .ask [prompt] (Generative AI - FIXED) ---
-    if (commandName === "ask") {
-        if (!ai) {
-            return message.channel.send("❌ AI command is disabled. The `GEMINI_API_KEY` environment variable is missing or initialization failed.");
-        }
-
-        const prompt = args.join(" ");
-
-        if (!prompt) {
-            return message.channel.send("Please provide a prompt to ask the AI.");
-        }
-
-        const typingPromise = message.channel.sendTyping();
-        const start = Date.now();
-
-        try {
-            // Get last 5 messages for context
-            const history = (await message.channel.messages.fetch({ limit: 5 }))
-                .map(msg => ({
-                    role: msg.author.bot ? "model" : "user",
-                    // Only send the actual message content, strip the command from the current message
-                    parts: [{ text: msg.content.startsWith(PREFIX + "ask") ? msg.content.substring((PREFIX + "ask").length).trim() : msg.content }]
-                }))
-                .filter(msg => msg.parts[0].text.length > 0)
-                .reverse(); // Reverse to get chronological order
-
-            const response = await ai.generateContent({
-                contents: history,
-                config: {
-                    systemInstruction: `You are a helpful and friendly Discord bot named Kira. Your name is Kira. Your job is to answer user questions concisely and clearly based on the provided context. Keep your response under 1500 characters.`,
-                },
-            });
-
-            const text = response.text.trim();
-            const end = Date.now();
-            const responseTime = (end - start) / 1000;
-
-            const responseEmbed = new Discord.EmbedBuilder()
-                .setColor(0x00ffff)
-                .setTitle(`AI Response for: ${prompt.substring(0, 50)}${prompt.length > 50 ? '...' : ''}`)
-                .setDescription(text)
-                .setFooter({ text: `Response time: ${responseTime.toFixed(2)}s | Powered by Google Gemini` });
-
-            message.channel.send({ embeds: [responseEmbed] });
-
-        } catch (error) {
-            console.error("Gemini API Error:", error);
-            if (error.code === 400 && error.message.includes("INVALID_ARGUMENT")) {
-                message.channel.send("❌ AI Error: The conversation context may be invalid. Please try a simple, new question.");
-            } else {
-                message.channel.send("❌ Sorry, I ran into an error while processing your request. Please try again later.");
-            }
-        } finally {
-            // Stop typing after the response is sent or if an error occurred
-            await typingPromise.then(typing => typing.delete().catch(() => {})).catch(() => {});
-        }
-    }
-
-
-    // --- Command: .help ---
-    else if (commandName === "help") {
+    // --- Command: .help (NOW STARTS THE COMMAND CHAIN) ---
+    if (commandName === "help") {
         const helpEmbed = new Discord.EmbedBuilder()
             .setColor(0x3498db)
             .setTitle("Kira Bot Commands")
@@ -1029,7 +951,7 @@ client.on("messageCreate", async (message) => {
                 },
                 {
                     name: "General Utility",
-                    value: "`.status` - Check the bot's ping and uptime.\n`.userinfo [user]` - Get information about a user.\n`.ask [prompt]` - Ask the AI a question (Requires `GEMINI_API_KEY`).",
+                    value: "`.status` - Check the bot's ping and uptime.\n`.userinfo [user]` - Get information about a user.",
                     inline: false,
                 },
                 {
