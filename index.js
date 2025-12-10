@@ -31,6 +31,9 @@ const PREFIX = ".";
 // Global memory store for embed drafts
 const userEmbedDrafts = {};
 
+// --- FIX: FLAG TO PREVENT DOUBLE INITIALIZATION / DOUBLE COMMANDS ---
+let botInitialized = false;
+
 // ANSI Color Map
 const COLOR_MAP = {
     RED: 0xff0000,
@@ -244,6 +247,14 @@ async function saveState(channelId, nextNum) {
 }
 
 async function initializeBot() {
+    // --- FIX: PREVENT DOUBLE INITIALIZATION ---
+    if (botInitialized) {
+        console.log("Bot initialization skipped: already running.");
+        return;
+    }
+    botInitialized = true;
+    // ------------------------------------------
+
     await setupDatabase();
     await loadState();
 
@@ -1048,7 +1059,7 @@ client.on("messageCreate", async (message) => {
             return message.channel.send(
                 "Please provide a number between 1 and 100 for messages to delete.",
             );
-        }
+        } // <-- FIX APPLIED HERE
 
         try {
             const deleted = await message.channel.bulkDelete(amount, true);
