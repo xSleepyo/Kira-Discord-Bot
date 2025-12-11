@@ -45,10 +45,6 @@ const COLOR_MAP = {
     DEFAULT: 0x3498db,
 };
 
-// --- Bot Owner ID for Shutdown Command ---
-// ⚠️ IMPORTANT: REPLACE THIS WITH YOUR ACTUAL DISCORD USER ID
-const OWNER_ID = "586721964903628801"; 
-
 // --- Ship Name Generator (Required for .ship command) ---
 function generateShipName(name1, name2) {
     const len1 = name1.length;
@@ -76,12 +72,25 @@ const eightBallResponses = [
     "Ask again later.",
     "Better not tell you now.",
     "Cannot predict now.",
+    "Concentrate and ask again.",
     "Don't count on it.",
     "My reply is no.",
     "My sources say no.",
     "Outlook not so good.",
     "Very doubtful.",
 ];
+
+// --- ANTI-SPAM: Prohibited Words List (Case-insensitive) ---
+// Define a list of words that will trigger a deletion.
+const PROHIBITED_WORDS = [
+    "nigger",
+    "nigga",
+    "chink",
+    "gook",
+    "kike",
+    "faggot",
+];
+// -----------------------------------------------------------
 
 // Connect to the PostgreSQL database
 const db = new Client({
@@ -94,10 +103,6 @@ const db = new Client({
 // Global variables for in-memory access
 let countingChannelId = null;
 let nextNumber = 1;
-
-// --- NEW GLOBAL: Reaction Roles Cache ---
-// Will store all reaction role configs: Map<message_id, [{emoji_name, role_id}, ...]>
-const reactionRoleCache = new Map(); 
 
 const client = new Discord.Client({
     intents: [
@@ -209,33 +214,6 @@ async function loadState() {
     }
 }
 
-// --- NEW FUNCTION: Load all reaction roles into the cache on startup ---
-async function loadReactionRoles() {
-    try {
-        const result = await db.query(
-            "SELECT message_id, emoji_name, role_id FROM reaction_roles",
-        );
-
-        reactionRoleCache.clear(); // Clear old cache
-        
-        // Populate the cache
-        for (const row of result.rows) {
-            const { message_id, emoji_name, role_id } = row;
-            
-            if (!reactionRoleCache.has(message_id)) {
-                reactionRoleCache.set(message_id, []);
-            }
-            
-            reactionRoleCache.get(message_id).push({ emoji_name, role_id });
-        }
-
-        console.log(`[DB] Loaded ${result.rows.length} reaction role configurations into cache.`);
-    } catch (error) {
-        console.error("CRITICAL ERROR: Failed to load reaction roles!", error);
-        throw error;
-    }
-}
-
 async function saveState(channelId, nextNum) {
     try {
         await db.query(
@@ -264,7 +242,6 @@ async function initializeBot() {
     try {
         await setupDatabase();
         await loadState();
-        await loadReactionRoles(); // Load persistent reaction roles on startup
 
         keepAlive(); // Starts the web server
         selfPing(); // Starts the internal self-ping loop for continuous activity
@@ -281,6 +258,44 @@ async function initializeBot() {
 // -------------------------------------------------------------
 client.on("messageCreate", async (message) => {
     if (message.author.bot) return;
+
+    // --- NEW: ANTI-SPAM/WORD FILTER LOGIC ---
+    // Bypass filter for Admins/Mods to prevent command conflicts or necessary exceptions
+    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+        const lowerCaseContent = message.content.toLowerCase();
+        let foundWord = null;
+
+        for (const word of PROHIBITED_WORDS) {
+            // Use regex for whole word matching to prevent "scunthorpe" problems
+            // \b ensures it matches the word boundary
+            const regex = new RegExp(`\\b${word}\\b`, "i"); 
+            if (regex.test(lowerCaseContent)) {
+                foundWord = word;
+                break;
+            }
+        }
+
+        if (foundWord) {
+            // 1. Delete the offensive message
+            await message.delete().catch(e => 
+                console.error(`Failed to delete filtered message: ${e.message}`)
+            );
+            
+            // 2. Send a temporary warning message to the user
+            const warningMsg = await message.channel.send(
+                `${message.author}, your message was deleted for containing a prohibited word. Repeated violations may result in a mute or ban.`
+            );
+            
+            // 3. Delete the warning message after 5 seconds
+            setTimeout(() => {
+                warningMsg.delete().catch(console.error);
+            }, 5000); 
+
+            // Stop processing this message to prevent it from triggering other commands
+            return;
+        }
+    }
+    // ------------------------------------------
 
     const content = message.content;
     const command = content.toLowerCase();
@@ -343,7 +358,7 @@ client.on("messageCreate", async (message) => {
                 },
                 {
                     name: "Moderation & Utility (Admin Required)",
-                    value: "`.purge [number]` - Delete messages.\n`.shutdown` - Safely shut down the bot (Owner only).", // Added .shutdown to help
+                    value: "`.purge [number]` - Delete messages.",
                     inline: false,
                 },
                 {
@@ -623,43 +638,6 @@ client.on("messageCreate", async (message) => {
                 "My joke generator seems to be taking a nap. Try again later!",
             );
         }
-    }
-    
-    // --- NEW: Command: .shutdown ---
-    else if (commandName === "shutdown") {
-        // 1. SECURITY CHECK: Only allow the owner to use this command
-        if (message.author.id !== OWNER_ID) {
-            return message.channel.send(
-                "❌ You are not the bot owner and cannot shut down the bot.",
-            );
-        }
-
-        const shutdownEmbed = new Discord.EmbedBuilder()
-            .setColor(COLOR_MAP.RED)
-            .setTitle("🚨 Shutting Down...")
-            .setDescription(
-                "Bot process is gracefully disconnecting and closing the database connection. The bot will go offline.",
-            );
-
-        // 2. ACKNOWLEDGE and Send the shutdown message first
-        await message.channel.send({ embeds: [shutdownEmbed] });
-
-        try {
-            // 3. CLEANUP: Log out of Discord
-            await client.destroy(); 
-            
-            // 4. CLEANUP: Close the database connection
-            // This is crucial for a clean exit when using a shared/pooled connection
-            await db.end();
-
-            console.log("✅ Bot disconnected and database connection closed.");
-        } catch (error) {
-            console.error("Error during graceful shutdown cleanup:", error);
-        }
-
-        // 5. EXIT: Force the Node.js process to exit
-        // This is what stops the bot on Render.
-        process.exit(0); 
     }
 
     // --- Simple Aliases: Hello! or Hey! ---
@@ -1122,22 +1100,6 @@ client.on("interactionCreate", async (interaction) => {
                     role.id,
                 ],
             );
-            
-            // --- UPDATE CACHE ---
-            const newConfig = { emoji_name: emojiName, role_id: role.id };
-            if (!reactionRoleCache.has(messageId)) {
-                reactionRoleCache.set(messageId, []);
-            }
-            // Remove old config if it exists (for updates)
-            const configs = reactionRoleCache.get(messageId);
-            const existingIndex = configs.findIndex(c => c.emoji_name === emojiName);
-            if (existingIndex > -1) {
-                configs[existingIndex] = newConfig; // Update existing
-            } else {
-                configs.push(newConfig); // Add new
-            }
-            // --------------------
-
 
             interaction.editReply({
                 content: `✅ Reaction role set! Reacting to the message in ${channel} with ${emojiInput} will now grant the ${role} role.`,
@@ -1247,8 +1209,6 @@ client.on("messageDelete", async (message) => {
             console.log(
                 `[DB CLEANUP] Removed ${result.rowCount} reaction role entries associated with deleted message ID: ${message.id}`,
             );
-            // Also remove from cache
-            reactionRoleCache.delete(message.id);
         }
     } catch (error) {
         console.error("Error during reaction role cleanup:", error);
@@ -1256,45 +1216,40 @@ client.on("messageDelete", async (message) => {
 });
 // ----------------------------------------------------
 
-/**
- * Standard handler for cached reactions (on bot startup/new messages).
- */
 async function handleReactionRole(reaction, user, added) {
     if (user.bot) return;
 
     if (reaction.partial) {
-        // We rely on the raw handler below for partial (uncached) reactions
         try {
             await reaction.fetch();
         } catch (error) {
             console.error(
-                "Something went wrong when fetching the partial reaction:",
+                "Something went wrong when fetching the message:",
                 error,
             );
             return;
         }
     }
-    
-    // Check if message is in the cache before querying DB
-    if (!reactionRoleCache.has(reaction.message.id)) return;
 
     const messageId = reaction.message.id;
+    const guildId = reaction.message.guild.id;
     let emojiName = reaction.emoji.id ? reaction.emoji.id : reaction.emoji.name;
 
     try {
-        // Instead of DB query here, use the CACHE for faster lookup
-        const configs = reactionRoleCache.get(messageId) || [];
-        const config = configs.find(c => c.emoji_name === emojiName);
+        const result = await db.query(
+            "SELECT role_id FROM reaction_roles WHERE message_id = $1 AND emoji_name = $2 AND guild_id = $3",
+            [messageId, emojiName, guildId],
+        );
 
-        if (!config) return;
+        if (result.rows.length === 0) return;
 
-        const roleId = config.role_id; // Get roleId from cache
+        const roleId = result.rows[0].role_id;
         const guild = reaction.message.guild;
         const member = await guild.members.fetch(user.id);
         const role = guild.roles.cache.get(roleId);
 
         if (!role) {
-            console.error(`Role ID ${roleId} not found in cache.`);
+            console.error(`Role ID ${roleId} not found.`);
             return;
         }
 
@@ -1304,87 +1259,16 @@ async function handleReactionRole(reaction, user, added) {
             await member.roles.remove(role).catch(console.error);
         }
     } catch (error) {
-        console.error("Error handling reaction role (Cached/Standard):", error);
+        console.error("Error handling reaction role:", error);
     }
 }
 
-// Use standard events for cached messages
-client.on(Events.MessageReactionAdd, (reaction, user) => {
-    // Standard events only reliably fire for cached messages.
-    // For uncached messages (bot restart), we use the Raw event.
-    handleReactionRole(reaction, user, true);
-});
-
-client.on(Events.MessageReactionRemove, (reaction, user) => {
-    handleReactionRole(reaction, user, false);
-});
-
-
-// --- CRITICAL PERSISTENCE FIX: Raw Event Listener ---
-// Handles reactions on messages posted BEFORE the bot was started/restarted.
-client.on(Events.Raw, async (packet) => {
-    // Only process reaction add/remove events
-    if (
-        !["MESSAGE_REACTION_ADD", "MESSAGE_REACTION_REMOVE"].includes(
-            packet.t,
-        )
-    )
-        return;
-
-    // Ignore reactions from the bot itself
-    if (packet.d.user_id === client.user.id) return;
-
-    const messageId = packet.d.message_id;
-
-    // Use the cache to check if this is a registered reaction role message
-    if (!reactionRoleCache.has(messageId)) return;
-
-    // Determine the type of emoji (standard or custom)
-    let emojiName;
-    if (packet.d.emoji.id) {
-        // Custom emoji: use the ID
-        emojiName = packet.d.emoji.id;
-    } else {
-        // Standard emoji: use the name/unicode
-        emojiName = packet.d.emoji.name;
-    }
-
-    // Check if the reaction is one we need to handle
-    const configs = reactionRoleCache.get(messageId);
-    const config = configs.find((c) => c.emoji_name === emojiName);
-
-    if (!config) return;
-
-    // Fetch necessary Discord objects
-    const guild = client.guilds.cache.get(packet.d.guild_id);
-    if (!guild) return; // Bot is somehow not in the guild anymore
-
-    // Fetch member
-    const member = await guild.members.fetch(packet.d.user_id).catch(error => {
-        console.error(`Failed to fetch member ${packet.d.user_id} for raw reaction:`, error);
-        return null;
-    });
-    if (!member) return;
-
-    const role = guild.roles.cache.get(config.role_id);
-    if (!role) {
-        console.error(`Role ID ${config.role_id} not found for raw event.`);
-        return;
-    }
-
-    const added = packet.t === "MESSAGE_REACTION_ADD";
-
-    try {
-        if (added) {
-            await member.roles.add(role).catch(console.error);
-        } else {
-            await member.roles.remove(role).catch(console.error);
-        }
-        console.log(`[RAW RR] ${added ? 'Granted' : 'Removed'} role ${role.name} for ${member.user.tag}.`);
-    } catch (error) {
-        console.error(`Error handling raw reaction role (${added ? 'ADD' : 'REMOVE'}):`, error);
-    }
-});
+client.on("messageReactionAdd", (reaction, user) =>
+    handleReactionRole(reaction, user, true),
+);
+client.on("messageReactionRemove", (reaction, user) =>
+    handleReactionRole(reaction, user, false),
+);
 
 
 // Final call to start the whole process
