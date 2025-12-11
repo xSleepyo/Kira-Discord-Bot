@@ -45,6 +45,9 @@ const COLOR_MAP = {
     DEFAULT: 0x3498db,
 };
 
+// --- GIF PERMS CONSTANT ---
+const GIF_PERMS_ROLE_NAME = "GifPerms"; // <-- Role Name Constant for GIF Permissions
+
 // --- Ship Name Generator (Required for .ship command) ---
 function generateShipName(name1, name2) {
     const len1 = name1.length;
@@ -80,6 +83,18 @@ const eightBallResponses = [
     "Very doubtful.",
 ];
 
+// --- ANTI-SPAM: Prohibited Words List (Case-insensitive) ---
+// Define a list of words that will trigger a deletion.
+const PROHIBITED_WORDS = [
+    "nigger",
+    "nigga",
+    "chink",
+    "gook",
+    "kike",
+    "faggot",
+];
+// -----------------------------------------------------------
+
 // Connect to the PostgreSQL database
 const db = new Client({
     connectionString: process.env.DATABASE_URL,
@@ -89,8 +104,11 @@ const db = new Client({
 });
 
 // Global variables for in-memory access
-let countingChannelId = null;
+// RESTORED: Renamed back to nextNumberChannelId, re-added interval and restart variables
+let nextNumberChannelId = null; 
 let nextNumber = 1;
+let selfPingInterval; 
+let restartChannelIdToAnnounce = null;
 
 const client = new Discord.Client({
     intents: [
@@ -128,7 +146,7 @@ function keepAlive() {
 function selfPing() {
     const url = process.env.RENDER_EXTERNAL_URL || `http://localhost:${process.env.PORT || 3000}`; 
 
-    setInterval(async () => {
+    selfPingInterval = setInterval(async () => { // Assigned to global variable
         try {
             const res = await axios.get(url); 
             console.log(`Self-Ping successful. Status: ${res.status}`);
@@ -143,6 +161,7 @@ async function setupDatabase() {
         await db.connect();
         console.log("✅ PostgreSQL Database connected.");
 
+        // Ensure the base counting table exists
         await db.query(`
             CREATE TABLE IF NOT EXISTS counting (
                 id INTEGER PRIMARY KEY,
@@ -150,6 +169,17 @@ async function setupDatabase() {
                 next_number INTEGER
             );
         `);
+
+        // RESTORED: Check and add restart_channel_id column for persistence
+        await db.query(`
+            DO $$ 
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='counting' AND column_name='restart_channel_id') THEN
+                    ALTER TABLE counting ADD COLUMN restart_channel_id TEXT;
+                END IF;
+            END $$;
+        `).catch(e => console.log("Restart channel column check skipped or failed (might already exist).", e.message));
+
 
         await db.query(`
             CREATE TABLE IF NOT EXISTS reaction_roles (
@@ -174,27 +204,30 @@ async function setupDatabase() {
 
 async function loadState() {
     try {
+        // MODIFIED: Select restart_channel_id as well
         const result = await db.query(
-            "SELECT channel_id, next_number FROM counting WHERE id = 1",
+            "SELECT channel_id, next_number, restart_channel_id FROM counting WHERE id = 1",
         );
 
         if (result.rows.length > 0) {
             const row = result.rows[0];
-            countingChannelId = row.channel_id || null;
+            nextNumberChannelId = row.channel_id || null;
             nextNumber = parseInt(row.next_number) || 1;
+            restartChannelIdToAnnounce = row.restart_channel_id || null; // RESTORED
         } else {
+            // Ensure the initial row exists with the new column set to NULL
             await db.query(
                 `
-                INSERT INTO counting (id, channel_id, next_number)
-                VALUES (1, $1, $2)
+                INSERT INTO counting (id, channel_id, next_number, restart_channel_id)
+                VALUES (1, $1, $2, $3)
                 ON CONFLICT (id) DO NOTHING;
             `,
-                [null, 1],
+                [null, 1, null],
             );
         }
 
         console.log(
-            `[DB] Loaded Channel ID: ${countingChannelId}, Next Number: ${nextNumber}`,
+            `[DB] Loaded Channel ID: ${nextNumberChannelId}, Next Number: ${nextNumber}, Restart Announce Channel: ${restartChannelIdToAnnounce}`,
         );
     } catch (error) {
         console.error("CRITICAL ERROR: Failed to load database state!", error);
@@ -202,15 +235,17 @@ async function loadState() {
     }
 }
 
-async function saveState(channelId, nextNum) {
+// MODIFIED: Added restartAnnounceId parameter
+async function saveState(channelId, nextNum, restartAnnounceId = null) {
     try {
+        // MODIFIED query to update restart_channel_id
         await db.query(
             `
             UPDATE counting
-            SET channel_id = $1, next_number = $2
+            SET channel_id = $1, next_number = $2, restart_channel_id = $3
             WHERE id = 1;
         `,
-            [channelId, nextNum],
+            [channelId, nextNum, restartAnnounceId],
         );
     } catch (error) {
         console.error("CRITICAL ERROR: Failed to save database state!", error);
@@ -247,11 +282,87 @@ async function initializeBot() {
 client.on("messageCreate", async (message) => {
     if (message.author.bot) return;
 
+    // --- GIF PERMS CHECK (AUTOMATIC ROLE REMOVAL) ---
+    const gifRole = message.member ? message.guild.roles.cache.find(r => r.name === GIF_PERMS_ROLE_NAME) : null;
+    
+    // CRITICAL: This outer 'if' block ensures the rest of the logic, including the message sending, 
+    // only runs if 1) the role exists AND 2) the user HAS the role.
+    if (gifRole && message.member && message.member.roles.cache.has(gifRole.id)) {
+        // Check for attachments, embeds (from links), or raw links
+        const containsContent = 
+            message.attachments.size > 0 || 
+            message.embeds.length > 0 ||
+            /\b(https?:\/\/\S+)\b/i.test(message.content); 
+        
+        if (containsContent) {
+            try {
+                // Remove the role AFTER a slight delay to ensure the content fully registers
+                setTimeout(async () => {
+                    // Check if the role is still present before attempting removal
+                    const currentMember = await message.guild.members.fetch(message.author.id).catch(() => null);
+                    if (currentMember && currentMember.roles.cache.has(gifRole.id)) { 
+                        await currentMember.roles.remove(gifRole);
+                        
+                        // Send a temporary notification ONLY after successful removal
+                        const removalMsg = await message.channel.send(
+                            `🗑️ ${message.author}, your **@${GIF_PERMS_ROLE_NAME}** role has been automatically removed after posting a link/GIF.`,
+                        );
+                        
+                        setTimeout(() => removalMsg.delete().catch(console.error), 7000); // Delete after 7 seconds
+                    }
+                }, 1000); // 1-second delay
+                
+            } catch (e) {
+                console.error("Failed to remove GIF perms role:", e);
+            }
+        }
+    }
+    // --- END GIF PERMS CHECK ---
+
+
+    // --- NEW: ANTI-SPAM/WORD FILTER LOGIC ---
+    // Bypass filter for Admins/Mods to prevent command conflicts or necessary exceptions
+    if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+        const lowerCaseContent = message.content.toLowerCase();
+        let foundWord = null;
+
+        for (const word of PROHIBITED_WORDS) {
+            // Use regex for whole word matching to prevent "scunthorpe" problems
+            // \b ensures it matches the word boundary
+            const regex = new RegExp(`\\b${word}\\b`, "i"); 
+            if (regex.test(lowerCaseContent)) {
+                foundWord = word;
+                break;
+            }
+        }
+
+        if (foundWord) {
+            // 1. Delete the offensive message
+            await message.delete().catch(e => 
+                console.error(`Failed to delete filtered message: ${e.message}`)
+            );
+            
+            // 2. Send a temporary warning message to the user
+            const warningMsg = await message.channel.send(
+                `${message.author}, your message was deleted for containing a prohibited word. Repeated violations may result in a mute or ban.`
+            );
+            
+            // 3. Delete the warning message after 5 seconds
+            setTimeout(() => {
+                warningMsg.delete().catch(console.error);
+            }, 5000); 
+
+            // Stop processing this message to prevent it from triggering other commands
+            return;
+        }
+    }
+    // ------------------------------------------
+
     const content = message.content;
     const command = content.toLowerCase();
 
     // --- Counting Logic Check ---
-    if (countingChannelId && message.channel.id === countingChannelId) {
+    if (nextNumberChannelId && message.channel.id === nextNumberChannelId) {
         const number = parseInt(content);
 
         if (isNaN(number)) {
@@ -264,7 +375,7 @@ client.on("messageCreate", async (message) => {
                 await message.react("✔️");
 
                 nextNumber++;
-                await saveState(countingChannelId, nextNumber);
+                await saveState(nextNumberChannelId, nextNumber, null); 
             } catch (error) {
                 console.error(
                     `Failed to react to message ID ${message.id}:`,
@@ -272,7 +383,7 @@ client.on("messageCreate", async (message) => {
                 );
 
                 nextNumber++;
-                await saveState(countingChannelId, nextNumber);
+                await saveState(nextNumberChannelId, nextNumber, null); 
             }
         } else {
             message.channel
@@ -308,7 +419,7 @@ client.on("messageCreate", async (message) => {
                 },
                 {
                     name: "Moderation & Utility (Admin Required)",
-                    value: "`.purge [number]` - Delete messages.",
+                    value: "`.purge [number]` - Delete messages.\n`.gifperms @user` - Grant one-time GIF/link permission.\n`.restart` - Restarts the bot process.",
                     inline: false,
                 },
                 {
@@ -429,6 +540,98 @@ client.on("messageCreate", async (message) => {
             );
         }
     }
+    
+    // --- Command: .gifperms (NEW) ---
+    else if (commandName === "gifperms") {
+        // Check for Administrator permission
+        if (
+            !message.member.permissions.has(
+                Discord.PermissionFlagsBits.Administrator,
+            )
+        ) {
+            return message.channel.send(
+                "❌ You must have Administrator permissions to grant GIF permissions.",
+            );
+        }
+
+        const targetMember = message.mentions.members.first();
+
+        if (!targetMember) {
+            return message.channel.send(
+                "❌ Please mention the user you want to grant GIF permissions to.",
+            );
+        }
+
+        // Find the specific role
+        const gifRole = message.guild.roles.cache.find(
+            (role) => role.name === GIF_PERMS_ROLE_NAME,
+        );
+
+        if (!gifRole) {
+            return message.channel.send(
+                `❌ The role **@${GIF_PERMS_ROLE_NAME}** was not found in this server. Please create it first.`,
+            );
+        }
+        
+        if (targetMember.roles.cache.has(gifRole.id)) {
+             return message.channel.send(
+                `⚠️ ${targetMember} already has the **@${GIF_PERMS_ROLE_NAME}** role.`,
+            );
+        }
+
+        try {
+            await targetMember.roles.add(gifRole);
+            message.channel.send(
+                `✅ Granted **@${GIF_PERMS_ROLE_NAME}** to ${targetMember}. They can now post **one** link/GIF.`,
+            );
+        } catch (error) {
+            console.error("Error adding GIF perms role:", error);
+            message.channel.send(
+                "❌ Failed to grant the role. Check the bot's role hierarchy and permissions.",
+            );
+        }
+    }
+    // --- End of .gifperms Command ---
+
+    // --- Command: .restart (RESTORED COMPLETION LOGIC) ---
+    else if (commandName === "restart") {
+        // Check for Administrator permission
+        if (
+            !message.member.permissions.has(
+                Discord.PermissionFlagsBits.Administrator,
+            )
+        ) {
+            return message.channel.send(
+                "❌ You must have Administrator permissions to restart the bot.",
+            );
+        }
+
+        try {
+            await message.channel.send("🔄 Restarting the bot now. Standby for a moment...");
+            
+            // 1. SAVE RESTART CHANNEL ID before shutting down
+            // The new instance will read this ID and send the completion message.
+            await saveState(nextNumberChannelId, nextNumber, message.channel.id);
+            
+            // 2. Clean up database connection
+            await db.end().catch(e => console.error("Failed to close DB connection:", e));
+
+            // 3. Clean up self-ping interval
+            if (selfPingInterval) {
+                clearInterval(selfPingInterval);
+            }
+
+            // 4. Destroy the Discord client connection
+            client.destroy();
+            
+            // 5. Exit the process, triggering the host to restart the script
+            process.exit(0);
+        } catch (error) {
+            console.error("Error during restart cleanup:", error);
+            message.channel.send("❌ Failed to initiate restart during cleanup. Check logs.");
+        }
+    }
+    // --- End of .restart Command ---
 
     // --- Command: .flip ---
     else if (commandName === "flip") {
@@ -536,7 +739,7 @@ client.on("messageCreate", async (message) => {
             .addFields(
                 {
                     name: "**Connection**",
-                    // FIX: Removed the extra backtick here: was "```ansi\n\x1b[0;32mOnline\x1b[0m\n\`\`\`"
+                    // FIX: Backtick corrected
                     value: "```ansi\n\x1b[0;32mOnline\x1b[0m\n```",
                     inline: true,
                 },
@@ -568,9 +771,9 @@ client.on("messageCreate", async (message) => {
     // --- Command: .joke (FIXED API ENDPOINT) ---
     else if (commandName === "joke") {
         try {
-            // FIX: Changed API endpoint from v2.jokeapi.dev to jokeapi.dev for stability
+            // FIX: Corrected API endpoint back to v2 for reliability
             const response = await axios.get(
-                "[https://jokeapi.dev/joke/Any?blacklistFlags=racist,sexist,explicit&type=single](https://jokeapi.dev/joke/Any?blacklistFlags=racist,sexist,explicit&type=single)",
+                "https://v2.jokeapi.dev/joke/Any?blacklistFlags=racist,sexist,explicit&type=single",
             );
             const joke = response.data.joke;
 
@@ -599,6 +802,24 @@ client.on("messageCreate", async (message) => {
 // -------------------------------------------------------------
 client.on(Events.ClientReady, async () => {
     console.log(`Logged in as ${client.user.tag}!`);
+
+    // --- RESTART COMPLETION CHECK (RESTORED) ---
+    if (restartChannelIdToAnnounce) {
+        try {
+            const channel = await client.channels.fetch(restartChannelIdToAnnounce);
+            if (channel) {
+                await channel.send("✅ **Restart complete!** I am back online.");
+                console.log(`Sent restart completion message to channel ${channel.id}`);
+            }
+        } catch (e) {
+            console.error("Failed to send restart completion message:", e);
+        } finally {
+            // Clear the stored ID regardless of success/failure
+            await saveState(nextNumberChannelId, nextNumber, null);
+            restartChannelIdToAnnounce = null; // Update in-memory state
+        }
+    }
+    // ------------------------------------------
 
     // --- SET BOT STATUS ---
     client.user.setPresence({
@@ -1086,9 +1307,9 @@ client.on("interactionCreate", async (interaction) => {
                 });
             }
 
-            countingChannelId = channel.id;
+            nextNumberChannelId = channel.id; 
             nextNumber = 1;
-            await saveState(countingChannelId, nextNumber);
+            await saveState(nextNumberChannelId, nextNumber, null); 
 
             await interaction.reply({
                 content: `Counting Game has been successfully set up in ${channel}!`,
@@ -1109,7 +1330,7 @@ client.on("interactionCreate", async (interaction) => {
                 });
             }
 
-            if (!countingChannelId) {
+            if (!nextNumberChannelId) { 
                 return interaction.reply({
                     content:
                         "The counting game has not been set up yet! Use /countinggame first.",
@@ -1118,7 +1339,7 @@ client.on("interactionCreate", async (interaction) => {
             }
 
             const countingChannel =
-                await client.channels.fetch(countingChannelId);
+                await client.channels.fetch(nextNumberChannelId); 
 
             if (countingChannel) {
                 await countingChannel.messages
@@ -1127,7 +1348,7 @@ client.on("interactionCreate", async (interaction) => {
             }
 
             nextNumber = 1;
-            await saveState(countingChannelId, nextNumber);
+            await saveState(nextNumberChannelId, nextNumber, null); 
 
             await interaction.reply({
                 content: `The Counting Game in ${countingChannel} has been **reset**! Start counting from **1**!`,
