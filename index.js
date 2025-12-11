@@ -45,6 +45,10 @@ const COLOR_MAP = {
     DEFAULT: 0x3498db,
 };
 
+// --- Bot Owner ID for Shutdown Command ---
+// ⚠️ IMPORTANT: REPLACE THIS WITH YOUR ACTUAL DISCORD USER ID
+const OWNER_ID = "586721964903628801"; 
+
 // --- Ship Name Generator (Required for .ship command) ---
 function generateShipName(name1, name2) {
     const len1 = name1.length;
@@ -72,7 +76,6 @@ const eightBallResponses = [
     "Ask again later.",
     "Better not tell you now.",
     "Cannot predict now.",
-    "Concentrate and ask again.",
     "Don't count on it.",
     "My reply is no.",
     "My sources say no.",
@@ -340,7 +343,7 @@ client.on("messageCreate", async (message) => {
                 },
                 {
                     name: "Moderation & Utility (Admin Required)",
-                    value: "`.purge [number]` - Delete messages.",
+                    value: "`.purge [number]` - Delete messages.\n`.shutdown` - Safely shut down the bot (Owner only).", // Added .shutdown to help
                     inline: false,
                 },
                 {
@@ -620,6 +623,43 @@ client.on("messageCreate", async (message) => {
                 "My joke generator seems to be taking a nap. Try again later!",
             );
         }
+    }
+    
+    // --- NEW: Command: .shutdown ---
+    else if (commandName === "shutdown") {
+        // 1. SECURITY CHECK: Only allow the owner to use this command
+        if (message.author.id !== OWNER_ID) {
+            return message.channel.send(
+                "❌ You are not the bot owner and cannot shut down the bot.",
+            );
+        }
+
+        const shutdownEmbed = new Discord.EmbedBuilder()
+            .setColor(COLOR_MAP.RED)
+            .setTitle("🚨 Shutting Down...")
+            .setDescription(
+                "Bot process is gracefully disconnecting and closing the database connection. The bot will go offline.",
+            );
+
+        // 2. ACKNOWLEDGE and Send the shutdown message first
+        await message.channel.send({ embeds: [shutdownEmbed] });
+
+        try {
+            // 3. CLEANUP: Log out of Discord
+            await client.destroy(); 
+            
+            // 4. CLEANUP: Close the database connection
+            // This is crucial for a clean exit when using a shared/pooled connection
+            await db.end();
+
+            console.log("✅ Bot disconnected and database connection closed.");
+        } catch (error) {
+            console.error("Error during graceful shutdown cleanup:", error);
+        }
+
+        // 5. EXIT: Force the Node.js process to exit
+        // This is what stops the bot on Render.
+        process.exit(0); 
     }
 
     // --- Simple Aliases: Hello! or Hey! ---
@@ -1218,15 +1258,12 @@ client.on("messageDelete", async (message) => {
 
 /**
  * Standard handler for cached reactions (on bot startup/new messages).
- * This function is kept for simplicity when the message/reaction is in cache.
  */
 async function handleReactionRole(reaction, user, added) {
     if (user.bot) return;
 
     if (reaction.partial) {
         // We rely on the raw handler below for partial (uncached) reactions
-        // and only attempt to fetch if necessary for the standard event, 
-        // but for persistence, the raw listener is much more reliable.
         try {
             await reaction.fetch();
         } catch (error) {
@@ -1242,7 +1279,6 @@ async function handleReactionRole(reaction, user, added) {
     if (!reactionRoleCache.has(reaction.message.id)) return;
 
     const messageId = reaction.message.id;
-    const guildId = reaction.message.guild.id;
     let emojiName = reaction.emoji.id ? reaction.emoji.id : reaction.emoji.name;
 
     try {
