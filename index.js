@@ -358,7 +358,7 @@ client.on("messageCreate", async (message) => {
                 },
                 {
                     name: "Moderation & Utility (Admin Required)",
-                    value: "`.purge [number]` - Delete messages.",
+                    value: "`.purge [number]` - Delete messages.\n`.restart` - Restarts the bot process.", // <--- UPDATED
                     inline: false,
                 },
                 {
@@ -479,6 +479,33 @@ client.on("messageCreate", async (message) => {
             );
         }
     }
+
+    // --- Command: .restart (NEW) ---
+    else if (commandName === "restart") {
+        // Check for Administrator permission
+        if (
+            !message.member.permissions.has(
+                Discord.PermissionFlagsBits.Administrator,
+            )
+        ) {
+            return message.channel.send(
+                "❌ You must have Administrator permissions to restart the bot.",
+            );
+        }
+
+        try {
+            await message.channel.send("🔄 Restarting the bot now...");
+            
+            // Destroy the client and exit the process. The host environment 
+            // is expected to automatically restart the application when the process exits.
+            client.destroy();
+            process.exit(0);
+        } catch (error) {
+            console.error("Error during restart:", error);
+            message.channel.send("❌ Failed to initiate restart.");
+        }
+    }
+    // --- End of .restart Command ---
 
     // --- Command: .flip ---
     else if (commandName === "flip") {
