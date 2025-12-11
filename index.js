@@ -103,6 +103,7 @@ const db = new Client({
 // Global variables for in-memory access
 let countingChannelId = null;
 let nextNumber = 1;
+let selfPingInterval; // <--- ADDED GLOBAL INTERVAL TRACKER
 
 const client = new Discord.Client({
     intents: [
@@ -140,7 +141,7 @@ function keepAlive() {
 function selfPing() {
     const url = process.env.RENDER_EXTERNAL_URL || `http://localhost:${process.env.PORT || 3000}`; 
 
-    setInterval(async () => {
+    selfPingInterval = setInterval(async () => { // <--- ASSIGNED TO GLOBAL TRACKER
         try {
             const res = await axios.get(url); 
             console.log(`Self-Ping successful. Status: ${res.status}`);
@@ -358,7 +359,7 @@ client.on("messageCreate", async (message) => {
                 },
                 {
                     name: "Moderation & Utility (Admin Required)",
-                    value: "`.purge [number]` - Delete messages.\n`.restart` - Restarts the bot process.", // <--- UPDATED
+                    value: "`.purge [number]` - Delete messages.\n`.restart` - Restarts the bot process.",
                     inline: false,
                 },
                 {
@@ -480,7 +481,7 @@ client.on("messageCreate", async (message) => {
         }
     }
 
-    // --- Command: .restart (NEW) ---
+    // --- Command: .restart (IMPROVED) ---
     else if (commandName === "restart") {
         // Check for Administrator permission
         if (
@@ -494,15 +495,24 @@ client.on("messageCreate", async (message) => {
         }
 
         try {
-            await message.channel.send("🔄 Restarting the bot now...");
+            await message.channel.send("🔄 Restarting the bot now. Standby for a moment...");
             
-            // Destroy the client and exit the process. The host environment 
-            // is expected to automatically restart the application when the process exits.
+            // 1. Clean up database connection
+            await db.end().catch(e => console.error("Failed to close DB connection:", e));
+
+            // 2. Clean up self-ping interval
+            if (selfPingInterval) {
+                clearInterval(selfPingInterval);
+            }
+
+            // 3. Destroy the Discord client connection
             client.destroy();
+            
+            // 4. Exit the process, triggering the host to restart the script
             process.exit(0);
         } catch (error) {
-            console.error("Error during restart:", error);
-            message.channel.send("❌ Failed to initiate restart.");
+            console.error("Error during restart cleanup:", error);
+            message.channel.send("❌ Failed to initiate restart during cleanup. Check logs.");
         }
     }
     // --- End of .restart Command ---
@@ -970,7 +980,7 @@ async function startEmbedConversation(interaction) {
                     embeds: [finalEmbed],
                 });
                 return channel.send(
-                    `\nLast step: Type \`send\` to finalize and send the embed, or type \`cancel\` to discard it.`,
+                    `\nLast step: Type \`send\` to finalize and send the embed, or type \`cancel\` to discard a.`,
                 );
 
             case "awaiting_send":
