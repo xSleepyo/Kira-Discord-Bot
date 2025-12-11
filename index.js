@@ -46,7 +46,7 @@ const COLOR_MAP = {
 };
 
 // --- GIF PERMS CONSTANT ---
-const GIF_PERMS_ROLE_NAME = "GifPerms"; // <-- NEW: Role Name Constant for GIF Permissions
+const GIF_PERMS_ROLE_NAME = "GifPerms"; // <-- Role Name Constant for GIF Permissions
 
 // --- Ship Name Generator (Required for .ship command) ---
 function generateShipName(name1, name2) {
@@ -279,10 +279,11 @@ async function initializeBot() {
 client.on("messageCreate", async (message) => {
     if (message.author.bot) return;
 
-    // --- NEW: GIF PERMS CHECK (AUTOMATIC ROLE REMOVAL) ---
+    // --- GIF PERMS CHECK (AUTOMATIC ROLE REMOVAL) ---
     const gifRole = message.member ? message.guild.roles.cache.find(r => r.name === GIF_PERMS_ROLE_NAME) : null;
     
-    // Check if user has the role and if the message contains postable content
+    // CRITICAL: This outer 'if' block ensures the rest of the logic, including the message sending, 
+    // only runs if 1) the role exists AND 2) the user HAS the role.
     if (gifRole && message.member && message.member.roles.cache.has(gifRole.id)) {
         // Check for attachments, embeds (from links), or raw links
         const containsContent = 
@@ -299,7 +300,7 @@ client.on("messageCreate", async (message) => {
                     if (currentMember && currentMember.roles.cache.has(gifRole.id)) { 
                         await currentMember.roles.remove(gifRole);
                         
-                        // Send a temporary notification
+                        // Send a temporary notification ONLY after successful removal
                         const removalMsg = await message.channel.send(
                             `🗑️ ${message.author}, your **@${GIF_PERMS_ROLE_NAME}** role has been automatically removed after posting a link/GIF.`,
                         );
@@ -736,7 +737,7 @@ client.on("messageCreate", async (message) => {
                 {
                     name: "**Connection**",
                     // Using ANSI code format that Discord renders
-                    value: "```ansi\n\x1b[0;32mOnline\x1b[0m\n```",
+                    value: "```ansi\n\x1b[0;32mOnline\x1b[0m\n\`\`\``",
                     inline: true,
                 },
                 {
@@ -770,7 +771,7 @@ client.on("messageCreate", async (message) => {
     else if (commandName === "joke") {
         try {
             const response = await axios.get(
-                "https://v2.jokeapi.dev/joke/Any?blacklistFlags=racist,sexist,explicit&type=single",
+                "[https://v2.jokeapi.dev/joke/Any?blacklistFlags=racist,sexist,explicit&type=single](https://v2.jokeapi.dev/joke/Any?blacklistFlags=racist,sexist,explicit&type=single)",
             );
             const joke = response.data.joke;
 
